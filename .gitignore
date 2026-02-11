@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+
+# Conda
+*.conda
+*.lock
+
+# Outputs (Huge + Private)
+output/
+logs/
+experiments/
+
+# API Keys
+*.key
+*.pem
+*.secret
+openrouter*.json
+conf.d/conf.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
