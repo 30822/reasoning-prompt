@@ -29,11 +29,13 @@ check_packages
 # Defaults
 # --------------------
 DEFAULT_TARGET_MODELS=(
-    "openai/o1"
-    "deepseek/deepseek-r1"
-    "anthropic/claude-3.7-sonnet"
-    "meta-llama/llama-4-maverick"
-    "google/gemini-3-pro-preview"
+    "openai/o3",
+    "deepseek/deepseek-r1-free"
+    # "openai/o1"
+    # "deepseek/deepseek-r1"
+    # "anthropic/claude-3.7-sonnet"
+    # "meta-llama/llama-4-maverick"
+    # "google/gemini-3-pro-preview"
 )
 
 INPUT_DATA_FILE="resources/data/sample_data.json"
