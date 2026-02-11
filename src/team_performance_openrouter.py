@@ -286,10 +286,11 @@ async def process_model(
 
 async def recalculate_final_decision_by_model_dir(
     dataset_file: str,
-    simulator_model: str = "openai/gpt-4o",
+    simulator_model: str,
     max_concurrent_requests: int = 10,
     resume: bool = True,
 ):
+
     project_root = _get_project_root()
 
     # dataset
@@ -375,7 +376,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--sim-dir", required=True, help="output/simulation/by_model")
     p.add_argument("--dataset", required=True, help="path to dataset json")
-    p.add_argument("--simulator-model", default="openai/gpt-4o")
+    p.add_argument("--simulator-model", required=True)
     p.add_argument("--max-concurrency", type=int, default=10)
     p.add_argument("--no-resume", action="store_true")
     args = p.parse_args()
