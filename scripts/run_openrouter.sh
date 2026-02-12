@@ -29,8 +29,8 @@ check_packages
 # Defaults
 # --------------------
 DEFAULT_TARGET_MODELS=(
-    "openai/o3",
-    "deepseek/deepseek-r1-free"
+    "openai/o3"
+    "deepseek/deepseek-r1-0528"
     # "openai/o1"
     # "deepseek/deepseek-r1"
     # "anthropic/claude-3.7-sonnet"
@@ -38,9 +38,11 @@ DEFAULT_TARGET_MODELS=(
     # "google/gemini-3-pro-preview"
 )
 
-INPUT_DATA_FILE="resources/data/sample_data.json"
-SIMULATOR_MODEL="openai/gpt-4o"
-JUDGE_MODEL="gpt-5.2"
+INPUT_DATA_FILE="resources/data/jama/jama_raw_neurology.json"
+SIMULATOR_MODEL="openai/gpt-4o-mini"
+# SIMULATOR_MODEL="openai/gpt-4o"
+JUDGE_MODEL="openai/gpt-5-mini"
+# JUDGE_MODEL="openai/gpt-5.2"
 MAX_CONCURRENT_REQUESTS=10
 BATCH_SIZE=20
 

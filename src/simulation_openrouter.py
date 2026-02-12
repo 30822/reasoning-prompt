@@ -34,8 +34,8 @@ def _load_prompts() -> dict:
 PROMPTS = _load_prompts()
 
 def _sanitize_filename(s: str) -> str:
-    # openai/o1 -> openai__o1
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "__", s)
+    # openai/o1 -> openai_o1
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", s)
 
 # ======================
 # experiments.yaml loader

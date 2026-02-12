@@ -186,6 +186,9 @@ async def evaluate_single_utterance_combined(
         ai_utterance=ai_utterance,
     )
 
+    # judge_prompt의 json 강제 지시 추가
+    judge_prompt += "\n\nIMPORTANT: Return ONLY a valid JSON object with keys: action, validity, brief_reason, error_type. Do not output any explanation outside JSON."
+
     if _is_empty_utterance(ai_utterance):
             return {
                 "action": "ACCEPT",          # safe default
@@ -208,8 +211,37 @@ async def evaluate_single_utterance_combined(
         raw = (response_text or "").strip()
         parsed = _safe_json_load(raw)
 
-        if not parsed:
-            raise ValueError("Empty JSON from judge")
+        if not parsed or "action" not in parsed or "validity" not in parsed:
+            print("[WARN] Empty or malformed JSON from judge. Retrying with truncated context...")
+
+            dialogue_context = dialogue_context[-8000:]
+
+            judge_prompt_retry = PROMPTS["judge_user_prompt"].format(
+                scenario=scenario,
+                image_caption=image_caption,
+                ground_truth_answer=ground_truth_answer,
+                rationale=rationale,
+                dialogue_context=dialogue_context,
+                ai_utterance=ai_utterance,
+            )
+            judge_prompt_retry += "\n\nIMPORTANT: Return ONLY a valid JSON object with keys: action, validity, brief_reason, error_type. Do not output any explanation outside JSON."
+
+            response_text = await call_llm(
+                model_name=judge_model,
+                messages=[
+                    {"role": "system", "content": PROMPTS["judge_system_prompt"]},
+                    {"role": "user", "content": judge_prompt_retry},
+                ],
+                temperature=0.0,
+                response_format={"type": "json_object"},
+                max_tokens=800,
+            )
+
+            raw = (response_text or "").strip()
+            parsed = _safe_json_load(raw)
+
+            if not parsed or "action" not in parsed or "validity" not in parsed:
+                raise ValueError("Empty JSON from judge (after retry)")
 
         action = _normalize_action(parsed.get("action", ""))
         validity = _normalize_validity(parsed.get("validity", ""))

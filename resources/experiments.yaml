@@ -5,7 +5,7 @@ models:
   llama: "meta-llama/llama-4-maverick"
   gemini: google/gemini-3-pro-preview
   o3 : "openai/o3"
-  r1_0528 : "deepseek/deepseek-r1-0528:free"
+  r1_0528 : "deepseek/deepseek-r1-0528"
 
 turn1_variants:
   B: "baseline"
