@@ -39,9 +39,9 @@ DEFAULT_TARGET_MODELS=(
 )
 
 INPUT_DATA_FILE="resources/data/jama/jama_raw_neurology.json"
-SIMULATOR_MODEL="openai/gpt-4o-mini"
+SIMULATOR_MODEL="openai/gpt-4o-mini" # for preliminary experiments
 # SIMULATOR_MODEL="openai/gpt-4o"
-JUDGE_MODEL="openai/gpt-5-mini"
+JUDGE_MODEL="openai/gpt-5-mini" # for preliminary experiments
 # JUDGE_MODEL="openai/gpt-5.2"
 MAX_CONCURRENT_REQUESTS=10
 BATCH_SIZE=20
