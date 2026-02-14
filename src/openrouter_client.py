@@ -1,11 +1,23 @@
 # src/openrouter_client.py
 import asyncio
+import re
 from typing import Optional, List, Dict, Any
 import httpx
 from openai import AsyncOpenAI
 from src.utils import get_openrouter_key
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
+# \u2028 LINE SEPARATOR, \u2029 PARAGRAPH SEPARATOR, \u0085 NEXT LINE
+# -> \n for reproducibility (avoids "unusual line terminators" in JSON)
+_LINE_TERM_PATTERN = re.compile(r"[\u2028\u2029\u0085]")
+
+
+def _sanitize_line_terminators(text: str) -> str:
+    """Replace Unicode line separators with standard \\n."""
+    if not text:
+        return text
+    return _LINE_TERM_PATTERN.sub("\n", text)
 _client: Optional[AsyncOpenAI] = None
 
 
@@ -63,7 +75,8 @@ async def call_llm(
             payload.update(kwargs)
 
             resp = await client.chat.completions.create(**payload)
-            return resp.choices[0].message.content or ""
+            raw = resp.choices[0].message.content or ""
+            return _sanitize_line_terminators(raw)
 
         except TypeError as e:
             # response_format 미지원(또는 OpenAI SDK/Router에서 인자 거부) 시 fallback

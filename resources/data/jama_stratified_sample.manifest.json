@@ -1,0 +1,60 @@
+{
+  "seed": 42,
+  "ratio": 0.1,
+  "min_per_file": 1,
+  "input_dir": "resources\\data\\jama",
+  "files": [
+    {
+      "file": "jama_raw_cardiology.json",
+      "specialty": "cardiology",
+      "n_total": 35,
+      "n_sampled": 4,
+      "mode": "list"
+    },
+    {
+      "file": "jama_raw_dermatology.json",
+      "specialty": "dermatology",
+      "n_total": 115,
+      "n_sampled": 12,
+      "mode": "list"
+    },
+    {
+      "file": "jama_raw_jama.json",
+      "specialty": "jama",
+      "n_total": 76,
+      "n_sampled": 8,
+      "mode": "list"
+    },
+    {
+      "file": "jama_raw_neurology.json",
+      "specialty": "neurology",
+      "n_total": 24,
+      "n_sampled": 2,
+      "mode": "list"
+    },
+    {
+      "file": "jama_raw_oncology.json",
+      "specialty": "oncology",
+      "n_total": 33,
+      "n_sampled": 3,
+      "mode": "list"
+    },
+    {
+      "file": "jama_raw_ophthalmology.json",
+      "specialty": "ophthalmology",
+      "n_total": 143,
+      "n_sampled": 14,
+      "mode": "list"
+    },
+    {
+      "file": "jama_raw_otolaryngology.json",
+      "specialty": "otolaryngology",
+      "n_total": 102,
+      "n_sampled": 10,
+      "mode": "list"
+    }
+  ],
+  "output": "resources\\data\\jama_stratified_sample.json",
+  "n_total_all": 528,
+  "n_sampled_all": 53
+}

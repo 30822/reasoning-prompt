@@ -66,16 +66,19 @@ def parse_final_answer(text: str) -> str:
     t = text.strip()
 
     # 가장 강한 패턴 우선
+    m = re.search(r"Final\s*Answer\s*:\s*\[\[?\s*([A-D])\s*\]?\]", t, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+
     m = re.search(r"Final\s*Answer\s*:\s*([ABCD])\b", t, flags=re.IGNORECASE)
     if m:
         return m.group(1).upper()
 
-    # JSON 형태로 뱉는 경우 대비
-    m = re.search(r'"final_answer"\s*:\s*"([ABCD])"', t, flags=re.IGNORECASE)
-    if m:
-        return m.group(1).upper()
-
-    return "Unknown"
+    # fallback: 마지막 줄에서 A-D 추출
+    lines = t.splitlines()
+    last_line = lines[-1] if lines else t
+    m2 = re.search(r"\b([A-D])\b", last_line, flags=re.IGNORECASE)
+    return m2.group(1).upper() if m2 else "Unknown"
 
 
 def parse_reasoning(text: str) -> str:
@@ -113,7 +116,7 @@ async def recalc_one_log(
             }
 
         options_text = format_options(case_data.get("options", {}))
-        correct_option = (case_data.get("correct_option") or "").strip()
+        correct_option = ((case_data.get("correct_option") or "").strip()).upper()
 
         transcript = build_transcript(dialogue)
 
