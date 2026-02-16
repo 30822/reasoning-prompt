@@ -15,6 +15,7 @@ venv/
 output/
 logs/
 experiments/
+output_gate/
 
 # API Keys
 *.key

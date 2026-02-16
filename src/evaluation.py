@@ -7,6 +7,7 @@ from src.openrouter_client import call_llm
 from tqdm import tqdm
 from typing import Dict, Any
 import re
+import os
 
 
 def _get_project_root():
@@ -374,6 +375,10 @@ async def evaluate_dialogue_overall(
         }
 
 
+# team_results와 중복되는 키 (annotated_output에서 제외 가능, is_team_correct는 medcobe용으로 유지)
+_REDUNDANT_TEAM_KEYS = ("ground_truth", "target_belief", "final_decision", "reasoning", "decision_reasoning")
+
+
 async def evaluate_and_annotate_dialogue(
     case_data: dict,
     log_data: dict,
@@ -381,6 +386,7 @@ async def evaluate_and_annotate_dialogue(
     keep_judge_raw: bool = False,
     keep_turn_level_summary: bool = False,
     keep_dialogue_level: bool = True,
+    drop_redundant_team_keys: bool = True,
 ) -> dict:
     """
     Annotates each AI turn with:
@@ -470,6 +476,10 @@ async def evaluate_and_annotate_dialogue(
     else:
         annotated_log.pop("dialogue_level", None)
 
+    if drop_redundant_team_keys:
+        for k in _REDUNDANT_TEAM_KEYS:
+            annotated_log.pop(k, None)
+
     return annotated_log
 
 
@@ -483,10 +493,11 @@ async def run_evaluation(
     keep_judge_raw: bool = False,
     keep_turn_level_summary: bool = False,
     keep_dialogue_level: bool = True,
+    drop_redundant_team_keys: bool = True,
 ):
     project_root = _get_project_root()
 
-    output_root = project_root / "output"
+    output_root = project_root / os.environ.get("MEDCOBE_OUTPUT_ROOT", "output")
     output_root.mkdir(parents=True, exist_ok=True)
 
     team_result_path = Path(team_result_file)
@@ -555,6 +566,7 @@ async def run_evaluation(
                     keep_judge_raw=keep_judge_raw,
                     keep_turn_level_summary=keep_turn_level_summary,
                     keep_dialogue_level=keep_dialogue_level,
+                    drop_redundant_team_keys=drop_redundant_team_keys,
                 )
             )
 

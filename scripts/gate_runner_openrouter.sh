@@ -1,52 +1,27 @@
 #!/bin/bash
-# Permission: chmod +x ".E/scripts/run_openrouter.sh"
+# Permission: chmod +x scripts/gate_runner_openrouter.sh
 # Usage:
-#   ./scripts/run_openrouter.sh medcobe [--model "openai/o1"] [--max-concurrent 10]
-# Modes: solo, team, medcobe
+#   ./scripts/gate_runner_openrouter.sh <solo|team|medcobe> [--model ...]
+#
+# Gate defaults:
+#   - Input: resources/data/experiments/gate_check_sample.json
+#   - Experiments: resources/experiments_gate.yaml (temporarily swapped in)
+#   - Output root: output_gate/
 
-set -e
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$PROJECT_ROOT"
-
-check_packages() {
-    local missing_packages=()
-
-    if ! python -c "import yaml" 2>/dev/null; then missing_packages+=("pyyaml"); fi
-    if ! python -c "import openai" 2>/dev/null; then missing_packages+=("openai"); fi
-    if ! python -c "import tqdm" 2>/dev/null; then missing_packages+=("tqdm"); fi
-    if ! python -c "import pandas" 2>/dev/null; then missing_packages+=("pandas"); fi
-    if [ ${#missing_packages[@]} -gt 0 ]; then
-        echo "Error: Missing required packages: ${missing_packages[*]}"
-        echo "Install: pip install -r requirements.txt"
-        exit 1
-    fi
-}
-check_packages
+set -euo pipefail
 
 # --------------------
-# Defaults
+# Gate-only constants
 # --------------------
-DEFAULT_TARGET_MODELS=(
-    "openai/o3"
-    "deepseek/deepseek-r1-0528"
-    # "openai/o1"
-    # "deepseek/deepseek-r1"
-    # "anthropic/claude-3.7-sonnet"
-    # "meta-llama/llama-4-maverick"
-    # "google/gemini-3-pro-preview"
-)
-
 INPUT_DATA_FILE="resources/data/experiments/gate_check_sample_v2.json"
-# SIMULATOR_MODEL="openai/gpt-4o-mini" # for preliminary experiments
-SIMULATOR_MODEL="openai/gpt-4o"
-# JUDGE_MODEL="openai/gpt-5-mini" # for preliminary experiments
-JUDGE_MODEL="openai/gpt-5.2"
-MAX_CONCURRENT_REQUESTS=10
-BATCH_SIZE=20
 
-OUTPUT_ROOT="output"
+SIMULATOR_MODEL="openai/gpt-4o"
+JUDGE_MODEL="openai/gpt-5.2"
+
+MAX_CONCURRENT_REQUESTS=5
+BATCH_SIZE=5
+
+OUTPUT_ROOT="output_gate"
 mkdir -p \
   "$OUTPUT_ROOT/solo/by_model" \
   "$OUTPUT_ROOT/simulation/by_model" \
@@ -67,7 +42,6 @@ MEDCOBE_OUTPUT="$OUTPUT_ROOT/medcobe/final_medcobe_evaluation.csv"
 MODE="${1:-medcobe}"
 shift || true
 
-
 # --------------------
 # Parse args
 # --------------------
@@ -84,6 +58,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# --------------------
+# Default target models (gate)
+# --------------------
+DEFAULT_TARGET_MODELS=("openai/o3" "deepseek/deepseek-r1-0528")
 
 # --------------------
 # Build model list
@@ -104,67 +83,57 @@ models_to_python_list() {
 }
 MODELS_LIST=$(models_to_python_list)
 
-
 run_python() {
   python - <<EOF
 $1
 EOF
 }
 
-
 # --------------------
-# Helpers (merge by_model -> single json dict)
+# Swap experiments.yaml -> experiments_gate.yaml
 # --------------------
-merge_by_model_dir_to_dict() {
-  # $1: input_dir (e.g., output/solo/by_model)
-  # $2: output_file (e.g., solo_performance_results.json)
-  local input_dir="$1"
-  local out_file="$2"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-  run_python "
-from pathlib import Path
-import json
+EXP_MAIN="${PROJECT_ROOT}/resources/experiments.yaml"
+EXP_GATE="${PROJECT_ROOT}/resources/experiments_gate.yaml"
+TS="$(date +%Y%m%d_%H%M%S)"
+EXP_BAK="${EXP_MAIN}.bak_gate_${TS}"
 
-d = Path(r'$SOLO_BY_MODEL_DIR_WIN')
-files = list(d.glob('*.json'))
+if [[ ! -f "${EXP_GATE}" ]]; then
+  echo "❌ Missing: ${EXP_GATE}"
+  echo "   Create resources/experiments_gate.yaml first."
+  exit 1
+fi
+if [[ ! -f "${EXP_MAIN}" ]]; then
+  echo "❌ Missing: ${EXP_MAIN}"
+  exit 1
+fi
 
-merged = {}
-for p in files:
-    obj = json.loads(p.read_text(encoding='utf-8'))
-    model = obj['model_name']  # fallback 쓰지 말기
-    merged[model] = obj
+cp "${EXP_MAIN}" "${EXP_BAK}"
+cp "${EXP_GATE}" "${EXP_MAIN}"
 
-out = Path(r'$SOLO_OUTPUT_WIN')
-out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding='utf-8')
-
-print(f'Merged {len(merged)} models -> {out}')
-"
+cleanup() {
+  echo ""
+  echo "=== Restoring experiments.yaml ==="
+  cp "${EXP_BAK}" "${EXP_MAIN}"
+  echo "Restored: ${EXP_MAIN}"
 }
+trap cleanup EXIT
 
-run_python "
-from pathlib import Path
-import json
-
-d = Path(r'$SOLO_BY_MODEL_DIR')
-print('DEBUG solo_by_model_dir =', d)
-print('DEBUG exists =', d.exists())
-files = list(d.glob('*.json'))
-print('DEBUG file_count =', len(files))
-print('DEBUG files =', [str(p) for p in files])
-"
+export MEDCOBE_OUTPUT_ROOT="output_gate"
+export MEDCOBE_EXPERIMENT_IDS="o3-B__B,o3-B__B_CL_SR,o3-B_COT_CL__B_SR,o3-B_COT_CL__B_CL_SR,r1_0528-B__B,r1_0528-B__B_CL_SR,r1_0528-B_COT_CL__B_SR,r1_0528-B_COT_CL__B_CL_SR"
 
 # --------------------
-# Pipeline
+# Pipeline dirs (gate)
 # --------------------
-
 run_python "
 from pathlib import Path
 root = Path(r'$PROJECT_ROOT')
 for rel in [
-  'output/solo/by_model',
-  'output/simulation/by_model',
-  'output/team/by_model',
+  '$OUTPUT_ROOT/solo/by_model',
+  '$OUTPUT_ROOT/simulation/by_model',
+  '$OUTPUT_ROOT/team/by_model',
 ]:
   p = root / rel
   p.mkdir(parents=True, exist_ok=True)
@@ -173,7 +142,7 @@ for rel in [
 
 case "$MODE" in
   solo)
-    echo "=== Solo ==="
+    echo "=== Gate Solo ==="
     run_python "
 import asyncio, sys
 sys.path.insert(0, '$PROJECT_ROOT')
@@ -185,31 +154,10 @@ asyncio.run(run_solo_performance(
   max_concurrent_requests=$MAX_CONCURRENT_REQUESTS
 ))
 "
-    echo "  - merge solo by_model -> combined json (compat)"
-    run_python "
-import json
-from pathlib import Path
-root = Path('$PROJECT_ROOT')
-solo_dir = root / 'output' / 'solo' / 'by_model'
-out_path = root / 'output' / 'solo' / '$SOLO_OUTPUT'
-out_path.parent.mkdir(parents=True, exist_ok=True)
-
-d = {}
-for p in sorted(solo_dir.glob('*.json')):
-    with open(p, 'r', encoding='utf-8') as f:
-        obj = json.load(f)
-    model = obj["model_name"]
-    d[model] = obj
-
-with open(out_path, 'w', encoding='utf-8') as f:
-    json.dump(d, f, ensure_ascii=False, indent=2)
-
-print(f'Merged {len(d)} models -> {out_path}')
-"
     ;;
 
   team)
-    echo "=== Team (by_model) ==="
+    echo "=== Gate Team (by_model) ==="
     run_python "
 import asyncio, sys
 sys.path.insert(0, '$PROJECT_ROOT')
@@ -221,34 +169,14 @@ asyncio.run(recalculate_final_decision_by_model_dir(
   resume=True
 ))
 "
-    echo "  - merge team by_model -> combined json (compat for evaluation.py)"
-    run_python "
-import json
-from pathlib import Path
-root = Path('$PROJECT_ROOT')
-team_dir = root / 'output' / 'team' / 'by_model'
-out_path = root / 'output' / 'team' / '$TEAM_OUTPUT'
-out_path.parent.mkdir(parents=True, exist_ok=True)
-
-d = {}
-for p in sorted(team_dir.glob('*.json')):
-    with open(p, 'r', encoding='utf-8') as f:
-        obj = json.load(f)
-    model = obj["model_name"]
-    d[model] = obj
-
-with open(out_path, 'w', encoding='utf-8') as f:
-    json.dump(d, f, ensure_ascii=False, indent=2)
-
-print(f'Merged {len(d)} models -> {out_path}')
-"
     ;;
 
   medcobe)
     echo "=========================================="
-    echo "Running MedCOBE Full Pipeline"
+    echo "Running Gate MedCOBE Pipeline"
     echo "Models: ${TARGET_MODELS[*]}"
     echo "Input: $INPUT_DATA_FILE"
+    echo "Output: $OUTPUT_ROOT"
     echo "=========================================="
 
     echo "[Step 1/5] Solo..."
@@ -263,16 +191,18 @@ asyncio.run(run_solo_performance(
   max_concurrent_requests=$MAX_CONCURRENT_REQUESTS
 ))
 "
-    echo "  - merge solo by_model -> combined json (compat)"
-    run_python "
+
+echo "  - merge solo by_model -> combined json (compat for downstream)"
+run_python "
 import json
 from pathlib import Path
-solo_dir = Path(r'$SOLO_BY_MODEL_DIR')
+
+src_dir = Path(r'$SOLO_BY_MODEL_DIR')
 out_path = Path(r'$SOLO_OUTPUT')
 out_path.parent.mkdir(parents=True, exist_ok=True)
 
 d = {}
-for p in sorted(solo_dir.glob('*.json')):
+for p in sorted(src_dir.glob('*.json')):
     with open(p, 'r', encoding='utf-8') as f:
         obj = json.load(f)
     model = obj.get('model_name') or p.stem
@@ -312,10 +242,12 @@ asyncio.run(recalculate_final_decision_by_model_dir(
   resume=True
 ))
 "
-    echo "  - merge team by_model -> combined json (compat for evaluation.py)"
-    run_python "
+
+echo "  - merge team by_model -> combined json (compat for evaluation.py)"
+run_python "
 import json
 from pathlib import Path
+
 team_dir = Path(r'$TEAM_BY_MODEL_DIR')
 out_path = Path(r'$TEAM_OUTPUT')
 out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -339,7 +271,7 @@ import asyncio, sys
 sys.path.insert(0, '$PROJECT_ROOT')
 from src.evaluation import run_evaluation
 asyncio.run(run_evaluation(
-  team_result_file='$TEAM_OUTPUT',
+  team_result_file='$OUTPUT_ROOT/team/team_results.json',
   output_file='$EVALUATION_OUTPUT',
   dataset_file='$INPUT_DATA_FILE',
   judge_model='$JUDGE_MODEL',
@@ -363,7 +295,7 @@ calculate_medcobe_scores(
     ;;
 
   *)
-    echo "Usage: $0 <solo|team|medcobe> [--model ...] [--input ...]"
+    echo "Usage: $0 <solo|team|medcobe> [--model ...]"
     exit 1
     ;;
 esac

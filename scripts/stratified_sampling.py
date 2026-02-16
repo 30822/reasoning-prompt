@@ -3,9 +3,10 @@
 
 """
 Stratified sampling over JAMA specialty JSON files.
-- Input dir:  resources/data/jama
-- Output:     resources/data/jama_stratified_sample.json
-- Keeps per-specialty proportions by sampling ~ratio from each file.
+- Input dir:  resources/data/jama (configurable via --in_dir)
+- Output:     configurable via --out_path / -o (default: resources/data/jama_stratified_sample.json)
+- --total N: draw exactly N samples, proportionally allocated across files
+- --ratio R: when --total not set, sample R fraction from each file (default 0.1)
 
 Assumptions:
 - Each input JSON is either:
@@ -17,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -37,13 +37,44 @@ def _load_cases(path: Path) -> Tuple[List[Dict[str, Any]], str]:
     raise ValueError(f"Unsupported JSON structure in {path}")
 
 
+def _allocate_proportional(target_total: int, sizes: List[int]) -> List[int]:
+    """Allocate target_total across strata proportionally; sum == target_total."""
+    total_n = sum(sizes)
+    if total_n == 0:
+        return [0] * len(sizes)
+
+    k_list = [target_total * n // total_n for n in sizes]
+    remainder = target_total - sum(k_list)
+
+    # Give +1 to strata with largest fractional remainder
+    if remainder > 0:
+        frac_remainders = [
+            (target_total * sizes[i] / total_n - k_list[i], i)
+            for i in range(len(sizes)) if k_list[i] < sizes[i]
+        ]
+        frac_remainders.sort(key=lambda x: -x[0])
+        for j in range(min(remainder, len(frac_remainders))):
+            idx = frac_remainders[j][1]
+            k_list[idx] = min(k_list[idx] + 1, sizes[idx])
+
+    return k_list
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Stratified sampling over JAMA specialty JSON files. "
+        "Use --total for fixed sample count, or --ratio for proportional sampling."
+    )
     ap.add_argument("--in_dir", type=str, default="resources/data/jama")
-    ap.add_argument("--out_path", type=str, default=None)
-    ap.add_argument("--ratio", type=float, default=0.1)
-    ap.add_argument("--seed", type=int, default=42) # 일단 고정, 나중에 바꿀 것
-    ap.add_argument("--min_per_file", type=int, default=1)
+    ap.add_argument("--out_path", "--output", "-o", type=str, default=None,
+                    help="Output JSON path (default: resources/data/jama_stratified_sample.json)")
+    ap.add_argument("--total", "-n", type=int, default=None,
+                    help="Total number of samples to draw (stratified by file size)")
+    ap.add_argument("--ratio", type=float, default=0.1,
+                    help="Sampling ratio per file when --total is not set (default: 0.1)")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--min_per_file", type=int, default=1,
+                    help="Minimum samples per file (ignored when --total is used)")
     ap.add_argument("--glob", type=str, default="jama_raw_*.json")
     args = ap.parse_args()
 
@@ -55,28 +86,38 @@ def main() -> None:
     if not paths:
         raise FileNotFoundError(f"No files matched: {in_dir / args.glob}")
 
-    rng = random.Random(args.seed)
-
-    sampled_all: List[Dict[str, Any]] = []
-    summary = []
-
+    # Load all cases and sizes first
+    all_cases: List[Tuple[List[Dict[str, Any]], str, str]] = []
+    sizes: List[int] = []
     for p in paths:
         cases, mode = _load_cases(p)
+        specialty = p.stem.replace("jama_raw_", "")
+        all_cases.append((cases, mode, specialty))
+        sizes.append(len(cases))
+
+    total_n = sum(sizes)
+    if args.total is not None:
+        if args.total <= 0 or args.total > total_n:
+            raise ValueError(f"--total must be in (0, {total_n}], got {args.total}")
+        k_per_file = _allocate_proportional(args.total, sizes)
+    else:
+        min_per = args.min_per_file
+        k_per_file = []
+        for n in sizes:
+            k = max(min_per, min(n, int(round(n * args.ratio))))
+            k_per_file.append(k)
+
+    rng = random.Random(args.seed)
+    sampled_all: List[Dict[str, Any]] = []
+    summary: List[Tuple[str, str, int, int, str]] = []
+
+    for (cases, mode, specialty), k, p in zip(all_cases, k_per_file, paths):
         n = len(cases)
-
-        # proportional per-file sampling
-        k = int(round(n * args.ratio))
-        if args.min_per_file is not None:
-            k = max(args.min_per_file, k)
-        k = min(k, n)
-
         idx = list(range(n))
         rng.shuffle(idx)
         pick = idx[:k]
         picked_cases = [cases[i] for i in pick]
 
-        # annotate source specialty for traceability
-        specialty = p.stem.replace("jama_raw_", "")
         for c in picked_cases:
             if isinstance(c, dict) and "source_specialty" not in c:
                 c["source_specialty"] = specialty
@@ -84,9 +125,8 @@ def main() -> None:
         sampled_all.extend(picked_cases)
         summary.append((p.name, specialty, n, k, mode))
 
-    # default output path
     if args.out_path is None:
-        out_path = Path("resources/data") / f"jama_stratified_sample.json"
+        out_path = Path("resources/data") / "jama_stratified_sample.json"
     else:
         out_path = Path(args.out_path)
 
@@ -101,9 +141,9 @@ def main() -> None:
     for fname, specialty, n, k, mode in summary:
         print(f" - {fname:28s} ({specialty:14s})  {k:4d}/{n:4d}  [{mode}]")
 
-    # Also write a tiny manifest next to output (optional but useful)
     manifest = {
         "seed": args.seed,
+        "total_requested": args.total,
         "ratio": args.ratio,
         "min_per_file": args.min_per_file,
         "input_dir": str(in_dir),
