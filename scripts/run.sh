@@ -1,7 +1,9 @@
 #!/bin/bash
-
-# Usage: ./scripts/run.sh <mode> [options]
+# Permission: chmod +x "scripts/run.sh"
+# Usage:
+#   ./scripts/run.sh medcobe [--model "openai/o3"] [--max-concurrent 10]
 # Modes: solo, team, medcobe
+# Uses: simulation.py, solo_performance.py, team_performance.py, utils.py (OpenAI API only, no OpenRouter)
 
 set -e
 
@@ -11,226 +13,317 @@ cd "$PROJECT_ROOT"
 
 check_packages() {
     local missing_packages=()
-    
-    if ! python3 -c "import yaml" 2>/dev/null; then
-        missing_packages+=("pyyaml")
-    fi
-    
-    if ! python3 -c "import openai" 2>/dev/null; then
-        missing_packages+=("openai")
-    fi
-    
-    if ! python3 -c "import tqdm" 2>/dev/null; then
-        missing_packages+=("tqdm")
-    fi
-    
-    if ! python3 -c "import pandas" 2>/dev/null; then
-        missing_packages+=("pandas")
-    fi
-    
+
+    if ! python -c "import yaml" 2>/dev/null; then missing_packages+=("pyyaml"); fi
+    if ! python -c "import openai" 2>/dev/null; then missing_packages+=("openai"); fi
+    if ! python -c "import tqdm" 2>/dev/null; then missing_packages+=("tqdm"); fi
+    if ! python -c "import pandas" 2>/dev/null; then missing_packages+=("pandas"); fi
     if [ ${#missing_packages[@]} -gt 0 ]; then
         echo "Error: Missing required packages: ${missing_packages[*]}"
-        echo ""
-        echo "Please install them by running:"
-        echo "  pip install -r requirements.txt"
-        echo ""
-        echo "Or install individually:"
-        echo "  pip install ${missing_packages[*]}"
+        echo "Install: pip install -r requirements.txt"
         exit 1
     fi
 }
-
 check_packages
 
-MODE="${1:-medcobe}"
-
-TARGET_MODELS=(
-    "gpt-5"
-    "gpt-4o"
-    "gpt-4o-mini"
-    "gpt-3.5-turbo"
-    "claude-sonnet-4-5-20250929"
-    "claude-haiku-4-5-20251001"
-    "claude-opus-4-5-20251101"
+# --------------------
+# Defaults
+# --------------------
+DEFAULT_TARGET_MODELS=(
+    "openai/o3"
+    # "deepseek/deepseek-r1-0528"
+    # "openai/o1"
+    # "anthropic/claude-3.7-sonnet"
+    # "meta-llama/llama-4-maverick"
+    # "google/gemini-3-pro-preview"
 )
 
-INPUT_DATA_FILE="resources/data/sample_data.json"
-SIMULATOR_MODEL="gpt-4o"
-JUDGE_MODEL="gpt-5.2"
+INPUT_DATA_FILE="resources/data/jama_combined.json"
+SIMULATOR_MODEL="openai/gpt-4o"
+JUDGE_MODEL="openai/gpt-5.2"
 MAX_CONCURRENT_REQUESTS=10
+# Dialogue-level judge만 생략 (turn-level은 실행). True=생략, False=실행
+SKIP_DIALOGUE_LEVEL_JUDGE="True"
 BATCH_SIZE=20
 
-SOLO_OUTPUT="solo_performance_results.json"
-SIMULATION_OUTPUT="simulator_results.json"
-EVALUATION_OUTPUT="annotated_results.json"
-TEAM_OUTPUT="simulator_results.json"
-MEDCOBE_OUTPUT="final_medcobe_evaluation.csv"
+OUTPUT_ROOT="output"
+mkdir -p \
+  "$OUTPUT_ROOT/solo/by_model" \
+  "$OUTPUT_ROOT/simulation/by_model" \
+  "$OUTPUT_ROOT/team/by_model" \
+  "$OUTPUT_ROOT/evaluation" \
+  "$OUTPUT_ROOT/medcobe"
 
-run_python() {
-    python3 -c "$1"
-}
+SOLO_BY_MODEL_DIR="$OUTPUT_ROOT/solo/by_model"
+SIM_BY_MODEL_DIR="$OUTPUT_ROOT/simulation/by_model"
+TEAM_BY_MODEL_DIR="$OUTPUT_ROOT/team/by_model"
+
+SOLO_OUTPUT="$OUTPUT_ROOT/solo/solo_performance_results.json"
+SIMULATION_OUTPUT="$OUTPUT_ROOT/simulation/simulator_results.json"
+TEAM_OUTPUT="$OUTPUT_ROOT/team/team_results.json"
+EVALUATION_OUTPUT="$OUTPUT_ROOT/evaluation/annotated_results.json"
+MEDCOBE_OUTPUT="$OUTPUT_ROOT/medcobe/final_medcobe_evaluation.csv"
+
+MODE="${1:-medcobe}"
+shift || true
+
+
+# --------------------
+# Parse args
+# --------------------
+TARGET_MODELS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)
+      TARGET_MODELS+=("$2")
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+# --------------------
+# Build model list
+# --------------------
+if [ ${#TARGET_MODELS[@]} -eq 0 ]; then
+  TARGET_MODELS=("${DEFAULT_TARGET_MODELS[@]}")
+fi
 
 models_to_python_list() {
     local result="["
     local first=true
     for model in "${TARGET_MODELS[@]}"; do
-        if [ "$first" = true ]; then
-            first=false
-        else
-            result+=", "
-        fi
-        result+="\"$model\""
+        if [ "$first" = true ]; then first=false; else result+=", "; fi
+        result+="\"${model//\"/\\\"}\""
     done
     result+="]"
     echo "$result"
 }
-
 MODELS_LIST=$(models_to_python_list)
 
+
+run_python() {
+  python - <<EOF
+$1
+EOF
+}
+
+
+# --------------------
+# Pipeline
+# --------------------
+
+run_python "
+from pathlib import Path
+root = Path(r'$PROJECT_ROOT')
+for rel in [
+  'output/solo/by_model',
+  'output/simulation/by_model',
+  'output/team/by_model',
+]:
+  p = root / rel
+  p.mkdir(parents=True, exist_ok=True)
+  print('OK dir:', p)
+"
+
 case "$MODE" in
-    solo)
-        echo "=========================================="
-        echo "Running Solo Performance Evaluation"
-        echo "=========================================="
-        echo "Models: ${TARGET_MODELS[*]}"
-        echo "Input: $INPUT_DATA_FILE"
-        echo "Output: $SOLO_OUTPUT"
-        echo ""
-        
-        run_python "
-import asyncio
-import sys
+  solo)
+    echo "=== Solo ==="
+    run_python "
+import asyncio, sys
 sys.path.insert(0, '$PROJECT_ROOT')
 from src.solo_performance import run_solo_performance
-
 asyncio.run(run_solo_performance(
-    input_file='$INPUT_DATA_FILE',
-    output_file='$SOLO_OUTPUT',
-    models_to_test=$MODELS_LIST,
-    max_concurrent_requests=$MAX_CONCURRENT_REQUESTS
+  input_file='$INPUT_DATA_FILE',
+  output_file='$SOLO_OUTPUT',
+  models_to_test=$MODELS_LIST,
+  max_concurrent_requests=$MAX_CONCURRENT_REQUESTS
 ))
 "
-        echo ""
-        echo "Solo performance evaluation completed!"
-        ;;
-    
-    team)
-        echo "=========================================="
-        echo "Running Team Performance Evaluation"
-        echo "=========================================="
-        echo "Team result file: $TEAM_OUTPUT"
-        echo "Dataset file: $INPUT_DATA_FILE"
-        echo "Simulator model: $SIMULATOR_MODEL"
-        echo ""
-        
-        run_python "
-import asyncio
-import sys
-sys.path.insert(0, '$PROJECT_ROOT')
-from src.team_performance import recalculate_final_decision
+    echo "  - merge solo by_model -> combined json (compat)"
+    run_python "
+import json
+from pathlib import Path
+root = Path('$PROJECT_ROOT')
+solo_dir = root / 'output' / 'solo' / 'by_model'
+out_path = root / 'output' / 'solo' / 'solo_performance_results.json'
+out_path.parent.mkdir(parents=True, exist_ok=True)
 
-asyncio.run(recalculate_final_decision(
-    team_result_file='$TEAM_OUTPUT',
-    dataset_file='$INPUT_DATA_FILE',
-    simulator_model='$SIMULATOR_MODEL',
-    max_concurrent_requests=$MAX_CONCURRENT_REQUESTS
+d = {}
+for p in sorted(solo_dir.glob('*.json')):
+    with open(p, 'r', encoding='utf-8') as f:
+        obj = json.load(f)
+    model = obj['model_name']
+    d[model] = obj
+
+with open(out_path, 'w', encoding='utf-8') as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+
+print(f'Merged {len(d)} models -> {out_path}')
+"
+    ;;
+
+  team)
+    echo "=== Team (by_model) ==="
+    run_python "
+import asyncio, sys
+sys.path.insert(0, '$PROJECT_ROOT')
+from src.team_performance import recalculate_final_decision_by_model_dir
+asyncio.run(recalculate_final_decision_by_model_dir(
+  dataset_file='$INPUT_DATA_FILE',
+  simulator_model='$SIMULATOR_MODEL',
+  max_concurrent_requests=$MAX_CONCURRENT_REQUESTS,
+  resume=True
 ))
 "
-        echo ""
-        echo "Team performance evaluation completed!"
-        ;;
-    
-    medcobe)
-        echo "=========================================="
-        echo "Running MedCOBE Pipeline"
-        echo "=========================================="
-        echo "Step 1: Simulation"
-        echo "Step 2: Evaluation"
-        echo "Step 3: MedCOBE Score Calculation"
-        echo ""
-        echo "Models: ${TARGET_MODELS[*]}"
-        echo "Input: $INPUT_DATA_FILE"
-        echo ""
-        
-        echo "------------------------------------------"
-        echo "[Step 1/3] Running Simulation..."
-        echo "------------------------------------------"
-        run_python "
-import asyncio
-import sys
+    echo "  - merge team by_model -> combined json (compat for evaluation.py)"
+    run_python "
+import json
+from pathlib import Path
+root = Path('$PROJECT_ROOT')
+team_dir = root / 'output' / 'team' / 'by_model'
+out_path = root / 'output' / 'team' / 'team_results.json'
+out_path.parent.mkdir(parents=True, exist_ok=True)
+
+d = {}
+for p in sorted(team_dir.glob('*.json')):
+    with open(p, 'r', encoding='utf-8') as f:
+        obj = json.load(f)
+    model = obj['model_name']
+    d[model] = obj
+
+with open(out_path, 'w', encoding='utf-8') as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+
+print(f'Merged {len(d)} models -> {out_path}')
+"
+    ;;
+
+  medcobe)
+    echo "=========================================="
+    echo "Running MedCOBE Full Pipeline (OpenAI only)"
+    echo "Models: ${TARGET_MODELS[*]}"
+    echo "Input: $INPUT_DATA_FILE"
+    echo "=========================================="
+
+    echo "[Step 1/5] Solo..."
+    run_python "
+import asyncio, sys
+sys.path.insert(0, '$PROJECT_ROOT')
+from src.solo_performance import run_solo_performance
+asyncio.run(run_solo_performance(
+  input_file='$INPUT_DATA_FILE',
+  output_file='$SOLO_OUTPUT',
+  models_to_test=$MODELS_LIST,
+  max_concurrent_requests=$MAX_CONCURRENT_REQUESTS
+))
+"
+    echo "  - merge solo by_model -> combined json (compat)"
+    run_python "
+import json
+from pathlib import Path
+solo_dir = Path(r'$SOLO_BY_MODEL_DIR')
+out_path = Path(r'$SOLO_OUTPUT')
+out_path.parent.mkdir(parents=True, exist_ok=True)
+
+d = {}
+for p in sorted(solo_dir.glob('*.json')):
+    with open(p, 'r', encoding='utf-8') as f:
+        obj = json.load(f)
+    model = obj.get('model_name') or p.stem
+    d[model] = obj
+
+with open(out_path, 'w', encoding='utf-8') as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+
+print(f'Merged {len(d)} models -> {out_path}')
+"
+
+    echo "[Step 2/5] Simulation..."
+    run_python "
+import asyncio, sys
 sys.path.insert(0, '$PROJECT_ROOT')
 from src.simulation import run_simulation
-
 asyncio.run(run_simulation(
-    input_file='$INPUT_DATA_FILE',
-    output_file='$SIMULATION_OUTPUT',
-    target_models=$MODELS_LIST,
-    simulator_model='$SIMULATOR_MODEL',
-    max_concurrent_requests=$MAX_CONCURRENT_REQUESTS
+  input_file='$INPUT_DATA_FILE',
+  target_models=$MODELS_LIST,
+  mode='medcobe',
+  simulator_model='$SIMULATOR_MODEL',
+  max_concurrent=$MAX_CONCURRENT_REQUESTS,
+  max_retries=3,
+  output_file=None
 ))
 "
-        echo ""
-        echo "Simulation completed!"
-        echo ""
-        
-        echo "------------------------------------------"
-        echo "[Step 2/3] Running Evaluation..."
-        echo "------------------------------------------"
-        run_python "
-import asyncio
-import sys
+
+    echo "[Step 3/5] Team recalc (by_model)..."
+    run_python "
+import asyncio, sys
+sys.path.insert(0, '$PROJECT_ROOT')
+from src.team_performance import recalculate_final_decision_by_model_dir
+asyncio.run(recalculate_final_decision_by_model_dir(
+  dataset_file='$INPUT_DATA_FILE',
+  simulator_model='$SIMULATOR_MODEL',
+  max_concurrent_requests=$MAX_CONCURRENT_REQUESTS,
+  resume=True
+))
+"
+    echo "  - merge team by_model -> combined json (compat for evaluation.py)"
+    run_python "
+import json
+from pathlib import Path
+team_dir = Path(r'$TEAM_BY_MODEL_DIR')
+out_path = Path(r'$TEAM_OUTPUT')
+out_path.parent.mkdir(parents=True, exist_ok=True)
+
+d = {}
+for p in sorted(team_dir.glob('*.json')):
+    with open(p, 'r', encoding='utf-8') as f:
+        obj = json.load(f)
+    model = obj.get('model_name') or p.stem
+    d[model] = obj
+
+with open(out_path, 'w', encoding='utf-8') as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+
+print(f'Merged {len(d)} models -> {out_path}')
+"
+
+    echo "[Step 4/5] Evaluation..."
+    run_python "
+import asyncio, sys
 sys.path.insert(0, '$PROJECT_ROOT')
 from src.evaluation import run_evaluation
-
 asyncio.run(run_evaluation(
-    team_result_file='$SIMULATION_OUTPUT',
-    output_file='$EVALUATION_OUTPUT',
-    dataset_file='$INPUT_DATA_FILE',
-    judge_model='$JUDGE_MODEL',
-    batch_size=$BATCH_SIZE,
-    solo_acc_file='$SOLO_OUTPUT'
+  team_result_file='$TEAM_OUTPUT',
+  output_file='$EVALUATION_OUTPUT',
+  dataset_file='$INPUT_DATA_FILE',
+  judge_model='$JUDGE_MODEL',
+  batch_size=$BATCH_SIZE,
+  solo_acc_file='$SOLO_OUTPUT',
+  use_openai_judge=True,
+  skip_dialogue_level_judge=$SKIP_DIALOGUE_LEVEL_JUDGE
 ))
 "
-        echo ""
-        echo "Evaluation completed!"
-        echo ""
-        
-        echo "------------------------------------------"
-        echo "[Step 3/3] Calculating MedCOBE Scores..."
-        echo "------------------------------------------"
-        run_python "
+
+    echo "[Step 5/5] MedCOBE..."
+    run_python "
 import sys
 sys.path.insert(0, '$PROJECT_ROOT')
 from src.medcobe import calculate_medcobe_scores
-
 calculate_medcobe_scores(
-    annotated_file='$EVALUATION_OUTPUT',
-    output_csv='$MEDCOBE_OUTPUT',
-    solo_file='$SOLO_OUTPUT'
+  annotated_file='$EVALUATION_OUTPUT',
+  output_csv='$MEDCOBE_OUTPUT',
+  solo_file='$SOLO_OUTPUT'
 )
 "
-        echo ""
-        echo "=========================================="
-        echo "MedCOBE Pipeline Completed!"
-        echo "=========================================="
-        echo "Results saved to: $MEDCOBE_OUTPUT"
-        ;;
-    
-    *)
-        echo "Error: Unknown mode '$MODE'"
-        echo ""
-        echo "Usage: $0 <mode>"
-        echo ""
-        echo "Modes:"
-        echo "  solo    - Run solo performance evaluation"
-        echo "  team    - Run team performance evaluation"
-        echo "  medcobe - Run full MedCOBE pipeline (simulation -> evaluation -> medcobe)"
-        echo ""
-        echo "Example:"
-        echo "  $0 solo"
-        echo "  $0 team"
-        echo "  $0 medcobe"
-        exit 1
-        ;;
-esac
+    echo "DONE. Output: $MEDCOBE_OUTPUT"
+    ;;
 
+  *)
+    echo "Usage: $0 <solo|team|medcobe> [--model ...] [--input ...]"
+    exit 1
+    ;;
+esac

@@ -29,7 +29,7 @@ check_packages
 # Defaults
 # --------------------
 DEFAULT_TARGET_MODELS=(
-    "openai/o3"
+    # "openai/o3"
     "deepseek/deepseek-r1-0528"
     # "openai/o1"
     # "deepseek/deepseek-r1"
@@ -38,12 +38,14 @@ DEFAULT_TARGET_MODELS=(
     # "google/gemini-3-pro-preview"
 )
 
-INPUT_DATA_FILE="resources/data/experiments/gate_check_sample_v2.json"
+INPUT_DATA_FILE="resources/data/jama_combined.json"
 # SIMULATOR_MODEL="openai/gpt-4o-mini" # for preliminary experiments
 SIMULATOR_MODEL="openai/gpt-4o"
 # JUDGE_MODEL="openai/gpt-5-mini" # for preliminary experiments
 JUDGE_MODEL="openai/gpt-5.2"
 MAX_CONCURRENT_REQUESTS=10
+# Dialogue-level judge만 생략 (turn-level은 실행). True=생략, False=실행
+SKIP_DIALOGUE_LEVEL_JUDGE="True"
 BATCH_SIZE=20
 
 OUTPUT_ROOT="output"
@@ -344,7 +346,9 @@ asyncio.run(run_evaluation(
   dataset_file='$INPUT_DATA_FILE',
   judge_model='$JUDGE_MODEL',
   batch_size=$BATCH_SIZE,
-  solo_acc_file='$SOLO_OUTPUT'
+  solo_acc_file='$SOLO_OUTPUT',
+  use_openai_judge=True,
+  skip_dialogue_level_judge=$SKIP_DIALOGUE_LEVEL_JUDGE
 ))
 "
 

@@ -4,6 +4,7 @@ import asyncio
 import yaml
 from pathlib import Path
 from src.openrouter_client import call_llm
+from src.utils import call_llm_openai
 from tqdm import tqdm
 from typing import Dict, Any
 import re
@@ -160,6 +161,7 @@ async def evaluate_single_utterance_combined(
     case_data: dict,
     judge_model: str,
     keep_judge_raw: bool = False,
+    use_openai_judge: bool = False,
 ) -> dict[str, Any]:
     """
     Returns ONLY the canonical keys used by the original medcobe.py:
@@ -198,8 +200,9 @@ async def evaluate_single_utterance_combined(
                 "error_type": ["NONE"],
             }
 
+    _call = call_llm_openai if use_openai_judge else call_llm
     try:
-        response_text = await call_llm(
+        response_text = await _call(
             model_name=judge_model,
             messages=[
                 {"role": "system", "content": PROMPTS["judge_system_prompt"]},
@@ -227,7 +230,7 @@ async def evaluate_single_utterance_combined(
             )
             judge_prompt_retry += "\n\nIMPORTANT: Return ONLY a valid JSON object with keys: action, validity, brief_reason, error_type. Do not output any explanation outside JSON."
 
-            response_text = await call_llm(
+            response_text = await _call(
                 model_name=judge_model,
                 messages=[
                     {"role": "system", "content": PROMPTS["judge_system_prompt"]},
@@ -235,7 +238,6 @@ async def evaluate_single_utterance_combined(
                 ],
                 temperature=0.0,
                 response_format={"type": "json_object"},
-                max_tokens=800,
             )
 
             raw = (response_text or "").strip()
@@ -317,6 +319,7 @@ async def evaluate_dialogue_overall(
     case_data: dict,
     judge_model: str,
     keep_judge_raw: bool = False,
+    use_openai_judge: bool = False,
 ) -> dict:
     """
     collaboration outcome, failure modes, error type evaluation
@@ -336,8 +339,9 @@ async def evaluate_dialogue_overall(
         dialogue_context=dialogue_context,
     )
 
+    _call = call_llm_openai if use_openai_judge else call_llm
     try:
-        resp_text = await call_llm(
+        resp_text = await _call(
             model_name=judge_model,
             messages=[
                 {"role": "system", "content": PROMPTS["dialogue_system_prompt"]},
@@ -387,6 +391,8 @@ async def evaluate_and_annotate_dialogue(
     keep_turn_level_summary: bool = False,
     keep_dialogue_level: bool = True,
     drop_redundant_team_keys: bool = True,
+    use_openai_judge: bool = False,
+    skip_dialogue_level_judge: bool = False,
 ) -> dict:
     """
     Annotates each AI turn with:
@@ -420,6 +426,7 @@ async def evaluate_and_annotate_dialogue(
                 case_data=case_data,
                 judge_model=judge_model,
                 keep_judge_raw=keep_judge_raw,
+                use_openai_judge=use_openai_judge,
             )
 
             # Canonical keys
@@ -465,12 +472,13 @@ async def evaluate_and_annotate_dialogue(
     else:
         annotated_log.pop("turn_level", None)
 
-    if keep_dialogue_level:
+    if keep_dialogue_level and not skip_dialogue_level_judge:
         overall = await evaluate_dialogue_overall(
             dialogue_context=dialogue_text,
             case_data=case_data,
             judge_model=judge_model,
             keep_judge_raw=keep_judge_raw,
+            use_openai_judge=use_openai_judge,
         )
         annotated_log["dialogue_level"] = overall
     else:
@@ -494,6 +502,8 @@ async def run_evaluation(
     keep_turn_level_summary: bool = False,
     keep_dialogue_level: bool = True,
     drop_redundant_team_keys: bool = True,
+    use_openai_judge: bool = False,
+    skip_dialogue_level_judge: bool = False,
 ):
     project_root = _get_project_root()
 
@@ -567,6 +577,8 @@ async def run_evaluation(
                     keep_turn_level_summary=keep_turn_level_summary,
                     keep_dialogue_level=keep_dialogue_level,
                     drop_redundant_team_keys=drop_redundant_team_keys,
+                    use_openai_judge=use_openai_judge,
+                    skip_dialogue_level_judge=skip_dialogue_level_judge,
                 )
             )
 

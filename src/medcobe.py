@@ -180,10 +180,7 @@ def calculate_medcobe_scores(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     out_df.to_csv(output_path, index=False, na_rep='NaN')
-    
-    print(f"{total_ai_utterances_error}")
-    print(f"{success_argue_strict}")
-    print(f"{recall_correction}")
+
     print("\n  MedCOBE Scores calculated and saved")
     print(f"   Annotated JSON file: {annotated_path}")
     print(f"   Solo performance file: {solo_path}")

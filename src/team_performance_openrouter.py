@@ -5,6 +5,7 @@ import yaml
 import pandas as pd
 from pathlib import Path
 from src.openrouter_client import call_llm
+from src.utils import call_llm_openai
 from tqdm import tqdm
 
 
@@ -100,10 +101,10 @@ def load_dataset(dataset_file: str) -> list[dict]:
 
 
 async def recalc_one_log(
-    log_entry: dict, 
-    case_data: dict, 
+    log_entry: dict,
+    case_data: dict,
     semaphore: asyncio.Semaphore,
-    simulator_model: str
+    simulator_model: str,
 ) -> dict:
     async with semaphore:
         dialogue = log_entry.get("dialogue", [])
@@ -133,10 +134,11 @@ async def recalc_one_log(
             {"role": "user", "content": user_block},
         ]
 
-        raw = await call_llm(
-            model_name=simulator_model, 
-            messages=messages, 
-            temperature=0.0
+        _call = call_llm_openai if (simulator_model or "").strip().startswith("openai/") else call_llm
+        raw = await _call(
+            model_name=simulator_model,
+            messages=messages,
+            temperature=0.0,
         )
         raw = raw.strip()
 

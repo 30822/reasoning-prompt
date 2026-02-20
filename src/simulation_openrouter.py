@@ -5,6 +5,7 @@ import yaml
 from pathlib import Path
 from tqdm import tqdm
 from src.openrouter_client import call_llm
+from src.utils import call_llm_openai
 import re
 import time
 from json import JSONDecodeError
@@ -212,8 +213,12 @@ async def run_single_simulation(
             image_caption = case["caption"]
             history: List[Dict[str, str]] = []
 
+            def _call_llm(model_name: str, messages, **kwargs):
+                fn = call_llm_openai if (model_name or "").strip().startswith("openai/") else call_llm
+                return fn(model_name=model_name, messages=messages, **kwargs)
+
             # [Turn 1] Simulator
-            sim_msg_1 = await call_llm(
+            sim_msg_1 = await _call_llm(
                 model_name=simulator_model,
                 messages=[
                     {"role": "system", "content": simulator_sys_prompt_turn_1},
@@ -227,7 +232,7 @@ async def run_single_simulation(
                     },
                 ],
                 temperature=0.0,
-                max_retries=max_retries,
+                retries=max_retries,
             )
             history.append({"role": "Doctor", "content": sim_msg_1})
 
@@ -238,19 +243,19 @@ async def run_single_simulation(
                 image_caption=image_caption,
                 sim_msg_1=sim_msg_1,
             )
-            ai_msg_1 = await call_llm(
+            ai_msg_1 = await _call_llm(
                 model_name=target_model,
                 messages=[
                     {"role": "system", "content": target_sys_prompt},
                     {"role": "user", "content": ai_turn1_user},
                 ],
                 temperature=0.0,
-                max_retries=max_retries,
+                retries=max_retries,
             )
             history.append({"role": "AI", "content": ai_msg_1})
 
             # [Turn 2] Simulator (Rebuttal)
-            sim_msg_2 = await call_llm(
+            sim_msg_2 = await _call_llm(
                 model_name=simulator_model,
                 messages=[
                     {"role": "system", "content": simulator_sys_prompt_turn_2},
@@ -267,7 +272,7 @@ async def run_single_simulation(
                     },
                 ],
                 temperature=0.0,
-                max_retries=max_retries,
+                retries=max_retries,
             )
             history.append({"role": "Doctor", "content": sim_msg_2})
 
@@ -280,14 +285,14 @@ async def run_single_simulation(
                 ai_msg_1=ai_msg_1,
                 sim_msg_2=sim_msg_2,
             )
-            ai_msg_2 = await call_llm(
+            ai_msg_2 = await _call_llm(
                 model_name=target_model,
                 messages=[
                     {"role": "system", "content": target_sys_prompt},
                     {"role": "user", "content": ai_turn2_user},
                 ],
                 temperature=0.0,
-                max_retries=max_retries,
+                retries=max_retries,
             )
             history.append({"role": "AI", "content": ai_msg_2})
 

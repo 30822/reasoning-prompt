@@ -3,6 +3,7 @@ import re
 import asyncio
 from pathlib import Path
 from src.openrouter_client import call_llm
+from src.utils import call_llm_openai
 from tqdm import tqdm
 import time
 
@@ -41,41 +42,41 @@ def extract_answer_key(text: str) -> str:
 
 
 async def solve_case_solo_async(
-    model_name, 
-    case, 
-    case_index, 
-    semaphore
+    model_name,
+    case,
+    case_index,
+    semaphore,
 ):
     async with semaphore:
         scenario = case['scenario']
         options_text = format_options(case['options'])
-        
+
         system_prompt = """
         You are a clinical AI assistant.
         Select the single best answer based on the given case.
         Return ONLY the option letter (A, B, C, or D).
         Do NOT explain.
         """
-        
+
         user_prompt = f"""
         [Clinical Case]
         {scenario}
-        
+
         [Options]
         {options_text}
-        
+
         Question: What is the most appropriate next step or diagnosis?
         """
-        
+
         try:
-            content = await call_llm(
+            _call = call_llm_openai if (model_name or "").strip().startswith("openai/") else call_llm
+            content = await _call(
                 model_name=model_name,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.0,
-                # max_tokens=800,  # 필요하면 켜도 됨
             )
             content = content.strip()
 
@@ -101,9 +102,9 @@ async def solve_case_solo_async(
 
 
 async def evaluate_model_async(
-    model_name, 
-    dataset, 
-    semaphore
+    model_name,
+    dataset,
+    semaphore,
 ):
     tasks = [
         solve_case_solo_async(model_name, case, idx, semaphore)
@@ -126,7 +127,7 @@ async def run_solo_performance(
     input_file: str,
     output_file: str,
     models_to_test: list,
-    max_concurrent_requests: int = 10
+    max_concurrent_requests: int = 10,
 ):
     
     project_root = _get_project_root()
