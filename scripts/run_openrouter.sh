@@ -38,7 +38,7 @@ DEFAULT_TARGET_MODELS=(
     # "google/gemini-3-pro-preview"
 )
 
-INPUT_DATA_FILE="resources/data/jama_combined.json"
+INPUT_DATA_FILE="resources/data/experiments/reproducibility_check_v1.json"
 # SIMULATOR_MODEL="openai/gpt-4o-mini" # for preliminary experiments
 SIMULATOR_MODEL="openai/gpt-4o"
 # JUDGE_MODEL="openai/gpt-5-mini" # for preliminary experiments
