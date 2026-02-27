@@ -1,8 +1,9 @@
 import asyncio
+import json
 import re
-import yaml
 import sys
 import os
+import yaml
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -11,6 +12,25 @@ import httpx
 # \u2028 LINE SEPARATOR, \u2029 PARAGRAPH SEPARATOR, \u0085 NEXT LINE
 # -> \n to avoid "unusual line terminators" in JSON parsing
 _LINE_TERM_PATTERN = re.compile(r"[\u2028\u2029\u0085]")
+
+
+def _recursive_sanitize(obj):
+    """재귀적으로 모든 문자열에서 \\u2028/\\u2029/\\u0085 제거."""
+    if isinstance(obj, str):
+        return _LINE_TERM_PATTERN.sub("\n", obj)
+    if isinstance(obj, dict):
+        return {k: _recursive_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_recursive_sanitize(x) for x in obj]
+    return obj
+
+
+def load_json_sanitized(path, encoding: str = "utf-8"):
+    """JSON 파일 로드 후 모든 문자열에서 \\u2028/\\u2029/\\u0085 치환 (이전 evaluation 저장본 대응)."""
+    p = Path(path)
+    raw = p.read_text(encoding=encoding)
+    data = json.loads(raw)
+    return _recursive_sanitize(data)
 
 
 def _sanitize_line_terminators(text: str) -> str:

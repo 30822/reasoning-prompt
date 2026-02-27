@@ -1,19 +1,24 @@
 # python scripts/bootstrap_reproducibility.py \
 #   --base_dir experiments \
-#   --runs o3_reproducibility_check_v1,o3_reproducibility_check_v2,o3_reproducibility_check_v3 \
+#   --runs r10528_v1,r10528_v2,r10528_v3 \
 #   --n_boot 2000 \
 #   --seed 42 \
-#   --out_dir analysis/bootstrap_o3
+#   --out_dir analysis/bootstrap_r10528_v2
 
 
 import argparse
 import json
 import math
 import random
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
-
 import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+from src.medcobe import get_all_ai_utterances
+from src.utils import load_json_sanitized
 
 
 _T1_ORDER = ["B", "B_COT", "B_CL", "B_COT_CL"]
@@ -32,17 +37,6 @@ def exp_id_to_cid(experiment_id: str) -> str:
     except Exception:
         return "C?"
 
-def get_all_ai_utterances(dialogue: List[dict]) -> List[Tuple[str, str]]:
-    ai_utterances = []
-    for turn in (dialogue or []):
-        if turn.get("role") == "AI":
-            action = turn.get("action") or turn.get("ai_action")
-            validity = turn.get("validity") or turn.get("reasoning_validity")
-            if action is not None and validity is not None:
-                ai_utterances.append((str(action).upper(), str(validity).upper()))
-    return ai_utterances
-
-
 # --- Per-case aggregation (block bootstrap unit) ---
 def build_case_table(annotated_json_path: Path) -> pd.DataFrame:
     """
@@ -53,8 +47,7 @@ def build_case_table(annotated_json_path: Path) -> pd.DataFrame:
       cor_succ = # of (ACCEPT, VALID) in mode=correct
       *_n = total AI utterances counted in that mode
     """
-    with open(annotated_json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = load_json_sanitized(annotated_json_path)
 
     rows = []
     for model_name, model_data in data.items():
@@ -235,19 +228,59 @@ def bootstrap_run(annotated_json_path: Path, n_boot: int, seed: int) -> pd.DataF
 
 def aggregate_across_runs(run_dfs: List[pd.DataFrame]) -> pd.DataFrame:
     """
-    Aggregate point estimates across runs (v1/v2/v3):
-    - mean and std of point estimates
+    Aggregate across runs and compute:
+    - mean
+    - std
+    - bootstrap CI across runs (percentile of run-level bootstrap means)
     """
+
     all_df = pd.concat(run_dfs, ignore_index=True)
-    # only point estimates (not CI columns)
-    cols = ["Team Accuracy", "Recall (Correction)", "Recall (Confirmation)", "MedCOBE Score"]
-    agg = all_df.groupby(["Model", "Experiment", "experiment_id"], as_index=False).agg(
-        N_runs=("Run", "nunique"),
-        N_cases=("N_cases", "mean"),
-        **{f"{c}_mean": (c, "mean") for c in cols},
-        **{f"{c}_std": (c, "std") for c in cols},
+
+    metrics = [
+        "Team Accuracy",
+        "Recall (Correction)",
+        "Recall (Confirmation)",
+        "MedCOBE Score",
+    ]
+
+    def pct_ci(series, lo=2.5, hi=97.5):
+        s = series.dropna().sort_values()
+        if len(s) == 0:
+            return pd.Series([float("nan"), float("nan")])
+        return pd.Series([s.quantile(lo/100), s.quantile(hi/100)])
+
+    agg_rows = []
+
+    for (model, exp, exp_id), grp in all_df.groupby(["Model", "Experiment", "experiment_id"]):
+
+        row = {
+            "Model": model,
+            "Experiment": exp,
+            "experiment_id": exp_id,
+            "N_runs": grp["Run"].nunique(),
+            "N_cases": grp["N_cases"].mean(),
+        }
+
+        for m in metrics:
+
+            mean = grp[m].mean()
+            std = grp[m].std()
+
+            ci_low, ci_high = pct_ci(grp[m])
+
+            row[f"{m}_mean"] = mean
+            row[f"{m}_std"] = std
+            row[f"{m}_CI_low"] = ci_low
+            row[f"{m}_CI_high"] = ci_high
+
+        agg_rows.append(row)
+
+    agg = pd.DataFrame(agg_rows)
+
+    return agg.sort_values(
+        ["Model", "MedCOBE Score_mean"],
+        ascending=[True, False]
     )
-    return agg.sort_values(["Model", "MedCOBE Score_mean"], ascending=[True, False])
 
 
 def main():

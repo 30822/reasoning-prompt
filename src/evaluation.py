@@ -107,7 +107,7 @@ def _safe_json_load(s: str) -> dict:
     if not s:
         return {}
 
-    s = s.strip()
+    s = s.strip().lstrip("\ufeff")  # BOM 제거
 
     # 1. 그대로 파싱
     try:
@@ -115,15 +115,24 @@ def _safe_json_load(s: str) -> dict:
     except Exception:
         pass
 
-    # 2. ```json ``` 블록 제거
-    s = re.sub(r"^```json", "", s, flags=re.IGNORECASE).strip()
-    s = re.sub(r"```$", "", s).strip()
+    # 2. ```json ... ``` 블록 추출 (개행 포함)
+    for pat in [r"```(?:json)?\s*([\s\S]*?)```", r"```\s*([\s\S]*?)```"]:
+        m = re.search(pat, s, re.IGNORECASE)
+        if m:
+            try:
+                return json.loads(m.group(1).strip())
+            except Exception:
+                pass
 
+    # 3. { } 밖의 접두/접미 제거
+    s = re.sub(r"^[^{]*", "", s, count=1)
+    s = re.sub(r"[^{]*$", "", s)
     try:
-        return json.loads(s)
+        return json.loads(s.strip())
     except Exception:
         pass
 
+    # 4. 첫 번째 {...} 블록 추출
     m = re.search(r"\{.*\}", s, flags=re.DOTALL)
     if m:
         try:
@@ -155,6 +164,56 @@ def _is_empty_utterance(text: str) -> bool:
     return len(text.strip()) == 0
 
 
+# 프롬프트 길이 제한 (Judge 컨텍스트 초과 방지)
+# 요청에 따라 현재는 제한을 사용하지 않음.
+# _MAX_SCENARIO_CHARS = 3500
+# _MAX_RATIONALE_CHARS = 3500
+# _MAX_DIALOGUE_CONTEXT_CHARS = 4000
+# _MAX_AI_UTTERANCE_CHARS = 2000
+
+
+def _truncate_tail(text: str | None, max_chars: int) -> str:
+    if not text:
+        return ""
+    s = str(text).strip()
+    return s[-max_chars:] if len(s) > max_chars else s
+
+
+# Judge 파싱 실패 경고 throttle
+_judge_parse_fail_count = 0
+_judge_parse_warn_threshold = 5  # 처음 5회만 출력, 이후 50회마다
+
+# OpenRouter용 strict JSON schema (Gemini 등 출력 강제)
+_JUDGE_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "judge_output",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["ARGUE", "ACCEPT"]},
+                "validity": {"type": "string", "enum": ["VALID", "INVALID"]},
+                "brief_reason": {"type": "string"},
+                "error_type": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["MISSED_RISK", "HALLUCINATED_RISK", "UNDER_SPECIFIED", "NONE"]},
+                },
+            },
+            "required": ["action", "validity", "brief_reason", "error_type"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _judge_response_format(judge_model: str) -> dict:
+    """OpenRouter(Gemini 등)는 strict json_schema, OpenAI는 json_object 사용."""
+    if (judge_model or "").strip().startswith("openai/"):
+        return {"type": "json_object"}
+    return _JUDGE_JSON_SCHEMA
+
+
 async def evaluate_single_utterance_combined(
     ai_utterance: str,
     dialogue_context: str,
@@ -170,15 +229,23 @@ async def evaluate_single_utterance_combined(
     Plus brief_reason / error_type for analysis.
     judge_raw/judge_parsed are optional (disabled by default) to reduce file size.
     """
+    global _judge_parse_fail_count
     ground_truth_answer = (
         case_data.get("correct_option")
         or case_data.get("answer")
         or case_data.get("ground_truth")
         or ""
     )
-    scenario = case_data.get("scenario")
-    image_caption = case_data.get("caption")
-    rationale = case_data.get("explanation")
+    # 긴 컨텍스트 제한 비활성화: 원문 전체 사용
+    # scenario = _truncate_tail(case_data.get("scenario"), _MAX_SCENARIO_CHARS)
+    scenario = case_data.get("scenario") or ""
+    image_caption = case_data.get("caption") or ""
+    # rationale = _truncate_tail(case_data.get("explanation"), _MAX_RATIONALE_CHARS)
+    rationale = case_data.get("explanation") or ""
+    # dialogue_context = _truncate_tail(dialogue_context, _MAX_DIALOGUE_CONTEXT_CHARS)
+    dialogue_context = dialogue_context or ""
+    # ai_utterance_trunc = _truncate_tail(ai_utterance, _MAX_AI_UTTERANCE_CHARS)
+    ai_utterance_trunc = ai_utterance or ""
 
     judge_prompt = PROMPTS["judge_user_prompt"].format(
         scenario=scenario,
@@ -186,7 +253,7 @@ async def evaluate_single_utterance_combined(
         ground_truth_answer=ground_truth_answer,
         rationale=rationale,
         dialogue_context=dialogue_context,
-        ai_utterance=ai_utterance,
+        ai_utterance=ai_utterance_trunc,
     )
 
     # judge_prompt의 json 강제 지시 추가
@@ -200,7 +267,8 @@ async def evaluate_single_utterance_combined(
                 "error_type": ["NONE"],
             }
 
-    _call = call_llm_openai if use_openai_judge else call_llm
+    _call = call_llm_openai if (judge_model or "").strip().startswith("openai/") else call_llm
+    rf = _judge_response_format(judge_model)
     try:
         response_text = await _call(
             model_name=judge_model,
@@ -209,24 +277,34 @@ async def evaluate_single_utterance_combined(
                 {"role": "user", "content": judge_prompt},
             ],
             temperature=0.0,
-            response_format={"type": "json_object"},
+            response_format=rf,
         )
 
         raw = (response_text or "").strip()
         parsed = _safe_json_load(raw)
 
         if not parsed or "action" not in parsed or "validity" not in parsed:
-            print("[WARN] Empty or malformed JSON from judge. Retrying with truncated context...")
+            _judge_parse_fail_count += 1
+            if _judge_parse_fail_count <= _judge_parse_warn_threshold or _judge_parse_fail_count % 50 == 0:
+                print(f"[WARN] Judge parse failure #{_judge_parse_fail_count}. Retrying with truncated context...")
 
-            dialogue_context = dialogue_context[-8000:]
+            # 재시도에서도 길이 제한 비활성화: 동일 원문 사용
+            # scenario_retry = _truncate_tail(scenario, 2000)
+            # rationale_retry = _truncate_tail(rationale, 2000)
+            # dialogue_context_retry = _truncate_tail(dialogue_context, 2000)
+            # ai_retry = _truncate_tail(ai_utterance_trunc, 1000)
+            scenario_retry = scenario
+            rationale_retry = rationale
+            dialogue_context_retry = dialogue_context
+            ai_retry = ai_utterance_trunc
 
             judge_prompt_retry = PROMPTS["judge_user_prompt"].format(
-                scenario=scenario,
+                scenario=scenario_retry,
                 image_caption=image_caption,
                 ground_truth_answer=ground_truth_answer,
-                rationale=rationale,
-                dialogue_context=dialogue_context,
-                ai_utterance=ai_utterance,
+                rationale=rationale_retry,
+                dialogue_context=dialogue_context_retry,
+                ai_utterance=ai_retry,
             )
             judge_prompt_retry += "\n\nIMPORTANT: Return ONLY a valid JSON object with keys: action, validity, brief_reason, error_type. Do not output any explanation outside JSON."
 
@@ -237,7 +315,7 @@ async def evaluate_single_utterance_combined(
                     {"role": "user", "content": judge_prompt_retry},
                 ],
                 temperature=0.0,
-                response_format={"type": "json_object"},
+                response_format=rf,
             )
 
             raw = (response_text or "").strip()
@@ -265,7 +343,9 @@ async def evaluate_single_utterance_combined(
         return out
 
     except Exception as e:
-        print(f"[WARN] Error in judging utterance (fallback used): {e}")
+        _judge_parse_fail_count += 1
+        if _judge_parse_fail_count <= _judge_parse_warn_threshold or _judge_parse_fail_count % 50 == 0:
+            print(f"[WARN] Judge error (fallback used) #{_judge_parse_fail_count}: {e}")
         out = {
             "action": "ACCEPT",          # safe default
             "validity": "INVALID",       # conservative default
@@ -339,7 +419,7 @@ async def evaluate_dialogue_overall(
         dialogue_context=dialogue_context,
     )
 
-    _call = call_llm_openai if use_openai_judge else call_llm
+    _call = call_llm_openai if (judge_model or "").strip().startswith("openai/") else call_llm
     try:
         resp_text = await _call(
             model_name=judge_model,

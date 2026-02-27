@@ -1,7 +1,10 @@
 import json
-import pandas as pd
 import math
 from pathlib import Path
+
+import pandas as pd
+
+from .utils import _sanitize_line_terminators, load_json_sanitized
 
 
 def _get_project_root():
@@ -37,13 +40,16 @@ def exp_id_to_cid(experiment_id: str) -> str:
 
 
 def get_all_ai_utterances(dialogue):
+    """\\u2028/\\u2029/\\u0085 제거 후 비교 (이전 evaluation에서 저장된 JSON 대응)."""
     ai_utterances = []
     for turn in (dialogue or []):
         if turn.get("role") == "AI":
             action = turn.get("action") or turn.get("ai_action")
             validity = turn.get("validity") or turn.get("reasoning_validity")
             if action is not None and validity is not None:
-                ai_utterances.append((str(action).upper(), str(validity).upper()))
+                a = _sanitize_line_terminators(str(action)).strip().upper()
+                v = _sanitize_line_terminators(str(validity)).strip().upper()
+                ai_utterances.append((a, v))
     return ai_utterances
 
 
@@ -73,8 +79,7 @@ def calculate_medcobe_scores(
         raise FileNotFoundError(f"Annotated JSON file not found: {annotated_path}")
     
     print(f"  Loading annotated JSON file: {annotated_path}")
-    with open(annotated_path, "r", encoding="utf-8") as f:
-        annotated_data = json.load(f)
+    annotated_data = load_json_sanitized(annotated_path)
     
     solo_data = {}
     if solo_path is not None and solo_path.exists():
