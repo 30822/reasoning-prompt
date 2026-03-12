@@ -4,8 +4,7 @@ import re
 import yaml
 import pandas as pd
 from pathlib import Path
-from src.openrouter_client import call_llm
-from src.utils import call_llm_openai
+from src.openrouter_client import get_llm_caller
 from tqdm import tqdm
 
 
@@ -134,7 +133,7 @@ async def recalc_one_log(
             {"role": "user", "content": user_block},
         ]
 
-        _call = call_llm_openai if (simulator_model or "").strip().startswith("openai/") else call_llm
+        _call = get_llm_caller(simulator_model)
         raw = await _call(
             model_name=simulator_model,
             messages=messages,

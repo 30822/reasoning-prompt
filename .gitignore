@@ -21,6 +21,7 @@ resources/experments_gate.yaml
 scripts/merge_json_cases.py
 etc/
 scripts/analysis.ipynb
+run.log
 
 # API Keys
 *.key

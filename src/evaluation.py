@@ -3,8 +3,7 @@ import json
 import asyncio
 import yaml
 from pathlib import Path
-from src.openrouter_client import call_llm
-from src.utils import call_llm_openai
+from src.openrouter_client import get_llm_caller
 from tqdm import tqdm
 from typing import Dict, Any
 import re
@@ -208,7 +207,7 @@ _JUDGE_JSON_SCHEMA = {
 
 
 def _judge_response_format(judge_model: str) -> dict:
-    """OpenRouter(Gemini 등)는 strict json_schema, OpenAI는 json_object 사용."""
+    """OpenAI 직접 API는 json_object, OpenRouter(Gemini 등)는 strict json_schema."""
     if (judge_model or "").strip().startswith("openai/"):
         return {"type": "json_object"}
     return _JUDGE_JSON_SCHEMA
@@ -267,7 +266,7 @@ async def evaluate_single_utterance_combined(
                 "error_type": ["NONE"],
             }
 
-    _call = call_llm_openai if (judge_model or "").strip().startswith("openai/") else call_llm
+    _call = get_llm_caller(judge_model)
     rf = _judge_response_format(judge_model)
     try:
         response_text = await _call(
@@ -419,7 +418,7 @@ async def evaluate_dialogue_overall(
         dialogue_context=dialogue_context,
     )
 
-    _call = call_llm_openai if (judge_model or "").strip().startswith("openai/") else call_llm
+    _call = get_llm_caller(judge_model)
     try:
         resp_text = await _call(
             model_name=judge_model,

@@ -1,10 +1,10 @@
 # src/openrouter_client.py
 import asyncio
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable, Awaitable
 import httpx
 from openai import AsyncOpenAI
-from src.utils import get_openrouter_key
+from src.utils import get_openrouter_key, call_llm_openai
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -19,6 +19,18 @@ def _sanitize_line_terminators(text: str) -> str:
         return text
     return _LINE_TERM_PATTERN.sub("\n", text)
 _client: Optional[AsyncOpenAI] = None
+
+
+def get_llm_caller(model_name: str) -> Callable[..., Awaitable[str]]:
+    """
+    Returns the appropriate LLM caller based on model prefix:
+      - openai/* -> call_llm_openai (OpenAI API direct)
+      - else     -> call_llm (OpenRouter)
+    """
+    m = (model_name or "").strip()
+    if m.startswith("openai/"):
+        return call_llm_openai
+    return call_llm
 
 
 def get_client(timeout_s: float = 120.0) -> AsyncOpenAI:

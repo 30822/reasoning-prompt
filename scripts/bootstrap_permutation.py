@@ -19,7 +19,7 @@ from src.utils import load_json_sanitized
 # Config
 # ============================
 EXPERIMENTS_YAML = "./resources/experiments.yaml"
-MODEL_NAME = "openai/o3"
+MODEL_NAME = "deepseek/deepseek-r1-0528"
 
 _T1_ORDER = ["B", "B_COT", "B_CL", "B_COT_CL"]
 _T2_ORDER = ["B", "B_CL", "B_SR", "B_CL_SR"]
@@ -365,7 +365,7 @@ if __name__ == "__main__":
     short = resolve_short_model_name(MODEL_NAME, model_map)
 
     annotated_json_path = f"experiments/(main) {short}_combined_sample/evaluation/annotated_results.json"
-    out_dir = Path(f"analysis/(main) paired bootstrap permutation_{short}_v2")
+    out_dir = Path(f"analysis/(main) paired bootstrap permutation_{short}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Processing {short}...")

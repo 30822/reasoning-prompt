@@ -2,8 +2,7 @@ import json
 import re
 import asyncio
 from pathlib import Path
-from src.openrouter_client import call_llm
-from src.utils import call_llm_openai
+from src.openrouter_client import get_llm_caller
 from tqdm import tqdm
 import time
 
@@ -69,7 +68,7 @@ async def solve_case_solo_async(
         """
 
         try:
-            _call = call_llm_openai if (model_name or "").strip().startswith("openai/") else call_llm
+            _call = get_llm_caller(model_name)
             content = await _call(
                 model_name=model_name,
                 messages=[

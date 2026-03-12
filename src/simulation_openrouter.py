@@ -4,8 +4,7 @@ import random
 import yaml
 from pathlib import Path
 from tqdm import tqdm
-from src.openrouter_client import call_llm
-from src.utils import call_llm_openai
+from src.openrouter_client import get_llm_caller
 import re
 import time
 from json import JSONDecodeError
@@ -214,8 +213,7 @@ async def run_single_simulation(
             history: List[Dict[str, str]] = []
 
             def _call_llm(model_name: str, messages, **kwargs):
-                fn = call_llm_openai if (model_name or "").strip().startswith("openai/") else call_llm
-                return fn(model_name=model_name, messages=messages, **kwargs)
+                return get_llm_caller(model_name)(model_name=model_name, messages=messages, **kwargs)
 
             # [Turn 1] Simulator
             sim_msg_1 = await _call_llm(
@@ -311,6 +309,15 @@ async def run_single_simulation(
             return None
 
 
+def _log_key(log: dict) -> tuple:
+    """Unique key for (case_id, experiment_id, mode)."""
+    return (
+        str(log.get("case_id", "")),
+        str(log.get("experiment_id", log.get("experiment_label", ""))),
+        str(log.get("mode", "")),
+    )
+
+
 async def simulate_model_all_experiments(
     model_name: str,
     dataset: list,
@@ -318,24 +325,59 @@ async def simulate_model_all_experiments(
     semaphore: asyncio.Semaphore,
     simulator_model: str,
     max_retries: int,
+    checkpoint_path: Optional[Path] = None,
+    done_keys: Optional[set] = None,
+    existing_logs: Optional[list] = None,
+    save_every: int = 20,
 ) -> dict:
-    tasks = []
+    done_keys = done_keys or set()
+    logs: list = list(existing_logs or [])
+    save_lock = asyncio.Lock()
+
+    # Build work items: (exp, case, mode) not yet done
+    work_items: list[tuple[dict, dict, str]] = []
     for exp in experiments:
         for case in dataset:
-            tasks.append(run_single_simulation(model_name, exp, case, "error", semaphore, simulator_model, max_retries))
-            tasks.append(run_single_simulation(model_name, exp, case, "correct", semaphore, simulator_model, max_retries))
+            for mode in ("error", "correct"):
+                key = (str(case.get("case_id", "")), str(exp["experiment_id"]), mode)
+                if key in done_keys:
+                    continue
+                if mode == "error" and not case.get("distractors"):
+                    continue
+                work_items.append((exp, case, mode))
 
-    logs = []
+    if not work_items:
+        return {"model_name": model_name, "logs": logs}
+
+    async def run_and_save(item: tuple):
+        exp, case, mode = item
+        res = await run_single_simulation(
+            model_name, exp, case, mode, semaphore, simulator_model, max_retries
+        )
+        if res:
+            async with save_lock:
+                logs.append(res)
+                done_keys.add(_log_key(res))
+                if checkpoint_path and len(logs) % save_every == 0:
+                    payload = {"model_name": model_name, "logs": logs}
+                    checkpoint_path.write_text(
+                        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+        return res
+
+    tasks = [run_and_save(item) for item in work_items]
     with tqdm(total=len(tasks), desc=f"[{model_name}]", leave=False) as pbar:
         for coro in asyncio.as_completed(tasks):
-            res = await coro
-            if res:
-                logs.append(res)
+            await coro
             pbar.update(1)
-    return {
-        "model_name": model_name,
-        "logs": logs,
-    }
+
+    if checkpoint_path and logs:
+        payload = {"model_name": model_name, "logs": logs}
+        checkpoint_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    return {"model_name": model_name, "logs": logs}
 
 
 # ======================
@@ -349,6 +391,11 @@ def _by_model_dir() -> Path:
 def _model_output_path(model_name: str) -> Path:
     return _by_model_dir() / f"{_sanitize_filename(model_name)}.json"
 
+
+def _checkpoint_path(model_name: str) -> Path:
+    return _by_model_dir() / f"{_sanitize_filename(model_name)}_checkpoint.json"
+
+
 async def run_simulation(
     target_models: list[str],
     input_file: str,
@@ -357,6 +404,7 @@ async def run_simulation(
     max_concurrent: int,
     max_retries: int,
     output_file: str | None = None,
+    resume: bool = True,
 ):
     input_path = Path(input_file)
     if not input_path.exists():
@@ -377,16 +425,34 @@ async def run_simulation(
 
     semaphore = asyncio.Semaphore(max_concurrent)
 
-    combined: dict[str, dict] = {}
     for idx, model in enumerate(target_models, 1):
         out_path = _model_output_path(model)
+        ckpt_path = _checkpoint_path(model)
 
-        if out_path.exists():
-            print(f"[{idx}/{len(target_models)}] {model} -> SKIP (exists): {out_path}")
+        if out_path.exists() and resume:
+            print(f"[{idx}/{len(target_models)}] {model} -> SKIP (complete): {out_path}")
+            if ckpt_path.exists():
+                ckpt_path.unlink()
             continue
 
+        done_keys: set = set()
+        existing_logs: list = []
+        if resume and ckpt_path.exists():
+            try:
+                with open(ckpt_path, "r", encoding="utf-8") as f:
+                    ckpt = json.load(f)
+                existing_logs = ckpt.get("logs", [])
+                done_keys = {_log_key(log) for log in existing_logs}
+                print(f"[{idx}/{len(target_models)}] {model} -> RESUME ({len(done_keys)} done)")
+            except Exception as e:
+                print(f"[{idx}/{len(target_models)}] {model} -> checkpoint load failed: {e}, starting fresh")
+
+        if not resume and ckpt_path.exists():
+            ckpt_path.unlink()
+
         experiments = _load_experiments_for_model(model)
-        print(f"[{idx}/{len(target_models)}] {model} -> RUN (experiments={len(experiments)})")
+        run_msg = f"RUN ({len(done_keys)} done)" if existing_logs else "RUN"
+        print(f"[{idx}/{len(target_models)}] {model} -> {run_msg}")
 
         result = await simulate_model_all_experiments(
             model_name=model,
@@ -395,6 +461,10 @@ async def run_simulation(
             semaphore=semaphore,
             simulator_model=simulator_model,
             max_retries=max_retries,
+            checkpoint_path=ckpt_path,
+            done_keys=done_keys,
+            existing_logs=existing_logs,
+            save_every=20,
         )
 
         model_result = {
@@ -404,6 +474,9 @@ async def run_simulation(
 
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(model_result, f, ensure_ascii=False, indent=2)
+
+        if ckpt_path.exists():
+            ckpt_path.unlink()
 
         print(f"   Saved: {out_path}")
 
@@ -417,6 +490,7 @@ if __name__ == "__main__":
     parser.add_argument("--simulator_model", required=True)
     parser.add_argument("--max_concurrent", type=int, default=10)
     parser.add_argument("--max_retries", type=int, default=3)
+    parser.add_argument("--no-resume", action="store_true", help="Start fresh, ignore checkpoint")
 
     # compatibility with run_openrouter.sh (so we can write output/simulation/<output_file>)
     parser.add_argument("--output_file", default=None)
@@ -432,5 +506,6 @@ if __name__ == "__main__":
             max_concurrent=args.max_concurrent,
             max_retries=args.max_retries,
             output_file=args.output_file,
+            resume=not args.no_resume,
         )
     )
