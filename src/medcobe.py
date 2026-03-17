@@ -24,14 +24,22 @@ def safe_float(x):
 _T1_ORDER = ["B", "B_COT", "B_CL", "B_COT_CL"]
 _T2_ORDER = ["B", "B_CL", "B_SR", "B_CL_SR"]
 
+# Robustness experiment variants (prompt part only); if present, display rhs as-is (e.g. B_CL_RO__B)
+_ROBUSTNESS_T1 = {"B_CL_LC", "B_CL_RO"}
+_ROBUSTNESS_T2 = {"B_CL_LC", "B_CL_RO", "B_SR_WP"}
+
+
 def exp_id_to_cid(experiment_id: str) -> str:
     """
-    experiment_id 예: 'o1-B_COT__B_CL_SR'
-    -> C8 (row=B_COT, col=B_CL_SR)
+    experiment_id 예: 'o1-B_COT__B_CL_SR' -> C8 (row=B_COT, col=B_CL_SR)
+    Robustness 실험 예: 'o3-B_CL_RO__B' -> 'B_CL_RO__B' (그대로 표기)
     """
     try:
         rhs = experiment_id.split("-", 1)[1]
         t1, t2 = rhs.split("__", 1)
+        # Robustness 실험: C1–C16 대신 프롬프트 조합 그대로 표기
+        if t1 in _ROBUSTNESS_T1 or t2 in _ROBUSTNESS_T2:
+            return rhs
         r = _T1_ORDER.index(t1)
         c = _T2_ORDER.index(t2)
         return f"C{r*4 + c + 1}"

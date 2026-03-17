@@ -22,9 +22,9 @@ def _get_project_root() -> Path:
 def _get_output_root() -> Path:
     return _get_project_root() / "output"
 
-def _load_prompts() -> dict:
-    project_root = _get_project_root()
-    prompts_file = project_root / "resources" / "prompt" / "simulator_prompts.yaml"
+def _load_prompts(prompts_file: Optional[Path] = None) -> dict:
+    if prompts_file is None:
+        prompts_file = _get_project_root() / "resources" / "prompt" / "simulator_prompts.yaml"
     if not prompts_file.exists():
         raise FileNotFoundError(f"Prompts file not found: {prompts_file}")
     with open(prompts_file, "r", encoding="utf-8") as f:
@@ -35,18 +35,19 @@ PROMPTS = _load_prompts()
 def _sanitize_filename(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", s)
 
-def _load_experiments_yaml() -> dict:
-    project_root = _get_project_root()
-    exp_file = project_root / "resources" / "experiments.yaml"
-    if not exp_file.exists():
-        raise FileNotFoundError(f"experiments.yaml not found: {exp_file}")
-    with open(exp_file, "r", encoding="utf-8") as f:
+def _load_experiments_yaml(experiments_file: Optional[Path] = None) -> dict:
+    if experiments_file is None:
+        experiments_file = _get_project_root() / "resources" / "experiments.yaml"
+    if not experiments_file.exists():
+        raise FileNotFoundError(f"experiments.yaml not found: {experiments_file}")
+    with open(experiments_file, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 EXPERIMENTS_YAML = _load_experiments_yaml()
 
-def _get_model_short_id(model_full_name: str) -> str:
-    models_map = EXPERIMENTS_YAML.get("models", {})
+def _get_model_short_id(model_full_name: str, experiments_cfg: Optional[dict] = None) -> str:
+    cfg = experiments_cfg if experiments_cfg is not None else EXPERIMENTS_YAML
+    models_map = cfg.get("models", {})
     if not models_map:
         raise ValueError("No 'models' mapping in resources/experiments.yaml")
     inv = {full: short for short, full in models_map.items()}
@@ -58,14 +59,15 @@ def _get_model_short_id(model_full_name: str) -> str:
         )
     return short
 
-def _load_experiments_for_model(model_full_name: str) -> List[dict]:
-    short = _get_model_short_id(model_full_name)
-    exps = EXPERIMENTS_YAML.get("experiments", [])
+def _load_experiments_for_model(model_full_name: str, experiments_cfg: Optional[dict] = None) -> List[dict]:
+    cfg = experiments_cfg if experiments_cfg is not None else EXPERIMENTS_YAML
+    short = _get_model_short_id(model_full_name, cfg)
+    exps = cfg.get("experiments", [])
     if not exps:
-        raise ValueError("No 'experiments' section in resources/experiments.yaml")
+        raise ValueError("No 'experiments' section in experiments config")
     filtered = [e for e in exps if e.get("model") == short]
-    if len(filtered) != 16:
-        raise ValueError(f"Expected 16 experiments for model '{short}', got {len(filtered)}")
+    if not filtered:
+        raise ValueError(f"No experiments for model '{short}'")
     norm: List[dict] = []
     for e in filtered:
         t1 = e.get("t1")
@@ -85,10 +87,11 @@ def _load_experiments_for_model(model_full_name: str) -> List[dict]:
 def format_options(options_dict: dict) -> str:
     return "".join([f"({k}) {v}\n" for k, v in options_dict.items()])
 
-def _render_ai_user_prompt_turn1(exp: dict, scenario_text: str, image_caption: str, sim_msg_1: str) -> str:
+def _render_ai_user_prompt_turn1(exp: dict, scenario_text: str, image_caption: str, sim_msg_1: str, prompts: Optional[dict] = None) -> str:
+    prompts = prompts if prompts is not None else PROMPTS
     t1_key = exp["turn1_key"]
-    template = PROMPTS["user_messages"]["ai_turn1_user_templates"][t1_key]
-    addon_text = PROMPTS.get("variant_addons", {}).get(t1_key, "").rstrip()
+    template = prompts["user_messages"]["ai_turn1_user_templates"][t1_key]
+    addon_text = prompts.get("variant_addons", {}).get(t1_key, "").rstrip()
     return template.format(
         scenario_text=scenario_text,
         image_caption=image_caption,
@@ -103,10 +106,12 @@ def _render_ai_user_prompt_turn2(
     sim_msg_1: str,
     ai_msg_1: str,
     sim_msg_2: str,
+    prompts: Optional[dict] = None,
 ) -> str:
+    prompts = prompts if prompts is not None else PROMPTS
     t2_key = exp["turn2_key"]
-    template = PROMPTS["user_messages"]["ai_turn2_user_templates"][t2_key]
-    addon_text = PROMPTS.get("variant_addons", {}).get(t2_key, "").rstrip()
+    template = prompts["user_messages"]["ai_turn2_user_templates"][t2_key]
+    addon_text = prompts.get("variant_addons", {}).get(t2_key, "").rstrip()
     return template.format(
         scenario_text=scenario_text,
         image_caption=image_caption,
@@ -125,7 +130,9 @@ async def run_single_simulation(
     semaphore: asyncio.Semaphore,
     simulator_model: str,
     max_retries: int,
+    prompts: Optional[dict] = None,
 ) -> Optional[dict]:
+    prompts = prompts if prompts is not None else PROMPTS
     async with semaphore:
         try:
             if mode == "error":
@@ -137,13 +144,13 @@ async def run_single_simulation(
             else:
                 raise ValueError(f"Unknown mode: {mode}")
 
-            simulator_sys_prompt_turn_1 = PROMPTS["simulator_base_system_prompt_turn_1"].format(
+            simulator_sys_prompt_turn_1 = prompts["simulator_base_system_prompt_turn_1"].format(
                 target_belief=target_belief
             )
-            simulator_sys_prompt_turn_2 = PROMPTS["simulator_base_system_prompt_turn_2"].format(
+            simulator_sys_prompt_turn_2 = prompts["simulator_base_system_prompt_turn_2"].format(
                 target_belief=target_belief
             )
-            target_sys_prompt = PROMPTS["target_ai_system_prompt"]
+            target_sys_prompt = prompts["target_ai_system_prompt"]
 
             scenario_text = case["scenario"]
             image_caption = case["caption"]
@@ -155,7 +162,7 @@ async def run_single_simulation(
                     {"role": "system", "content": simulator_sys_prompt_turn_1},
                     {
                         "role": "user",
-                        "content": PROMPTS["user_messages"]["simulator_turn1_user"].format(
+                        "content": prompts["user_messages"]["simulator_turn1_user"].format(
                             scenario_text=scenario_text,
                             target_belief=target_belief,
                             image_caption=image_caption,
@@ -172,6 +179,7 @@ async def run_single_simulation(
                 scenario_text=scenario_text,
                 image_caption=image_caption,
                 sim_msg_1=sim_msg_1,
+                prompts=prompts,
             )
             ai_msg_1 = await call_llm_openai(
                 model_name=target_model,
@@ -190,7 +198,7 @@ async def run_single_simulation(
                     {"role": "system", "content": simulator_sys_prompt_turn_2},
                     {
                         "role": "user",
-                        "content": PROMPTS["user_messages"]["simulator_turn2_user"].format(
+                        "content": prompts["user_messages"]["simulator_turn2_user"].format(
                             scenario_text=scenario_text,
                             image_caption=image_caption,
                             options_text=format_options(case["options"]),
@@ -212,6 +220,7 @@ async def run_single_simulation(
                 sim_msg_1=sim_msg_1,
                 ai_msg_1=ai_msg_1,
                 sim_msg_2=sim_msg_2,
+                prompts=prompts,
             )
             ai_msg_2 = await call_llm_openai(
                 model_name=target_model,
@@ -246,12 +255,14 @@ async def simulate_model_all_experiments(
     semaphore: asyncio.Semaphore,
     simulator_model: str,
     max_retries: int,
+    prompts: Optional[dict] = None,
 ) -> dict:
+    prompts = prompts if prompts is not None else PROMPTS
     tasks = []
     for exp in experiments:
         for case in dataset:
-            tasks.append(run_single_simulation(model_name, exp, case, "error", semaphore, simulator_model, max_retries))
-            tasks.append(run_single_simulation(model_name, exp, case, "correct", semaphore, simulator_model, max_retries))
+            tasks.append(run_single_simulation(model_name, exp, case, "error", semaphore, simulator_model, max_retries, prompts=prompts))
+            tasks.append(run_single_simulation(model_name, exp, case, "correct", semaphore, simulator_model, max_retries, prompts=prompts))
 
     logs = []
     with tqdm(total=len(tasks), desc=f"[{model_name}]", leave=False) as pbar:
@@ -280,6 +291,8 @@ async def run_simulation(
     max_concurrent: int,
     max_retries: int,
     output_file: str | None = None,
+    prompts_file: str | Path | None = None,
+    experiments_file: str | Path | None = None,
 ):
     input_path = Path(input_file)
     if not input_path.exists():
@@ -290,6 +303,18 @@ async def run_simulation(
 
     if not target_models:
         raise ValueError("No target model provided. Use --model <provider/model>.")
+
+    project_root = _get_project_root()
+    prompts_path = None
+    if prompts_file:
+        p = Path(prompts_file)
+        prompts_path = p if p.is_absolute() else project_root / p
+    experiments_path = None
+    if experiments_file:
+        p = Path(experiments_file)
+        experiments_path = p if p.is_absolute() else project_root / p
+    prompts = _load_prompts(prompts_path) if prompts_path else PROMPTS
+    experiments_cfg = _load_experiments_yaml(experiments_path) if experiments_path else None
 
     output_root = _get_output_root()
     sim_root = output_root / "simulation"
@@ -306,7 +331,7 @@ async def run_simulation(
             print(f"[{idx}/{len(target_models)}] {model} -> SKIP (exists): {out_path}")
             continue
 
-        experiments = _load_experiments_for_model(model)
+        experiments = _load_experiments_for_model(model, experiments_cfg)
         print(f"[{idx}/{len(target_models)}] {model} -> RUN (experiments={len(experiments)})")
 
         result = await simulate_model_all_experiments(
@@ -316,6 +341,7 @@ async def run_simulation(
             semaphore=semaphore,
             simulator_model=simulator_model,
             max_retries=max_retries,
+            prompts=prompts,
         )
 
         model_result = {
@@ -338,6 +364,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_concurrent", type=int, default=10)
     parser.add_argument("--max_retries", type=int, default=3)
     parser.add_argument("--output_file", default=None)
+    parser.add_argument("--prompts_file", default=None, help="e.g. resources/prompt/simulator_prompts_robustness.yaml")
+    parser.add_argument("--experiments_file", default=None, help="e.g. resources/experiments_robustness.yaml")
 
     args = parser.parse_args()
 
@@ -350,5 +378,7 @@ if __name__ == "__main__":
             max_concurrent=args.max_concurrent,
             max_retries=args.max_retries,
             output_file=args.output_file,
+            prompts_file=args.prompts_file,
+            experiments_file=args.experiments_file,
         )
     )
