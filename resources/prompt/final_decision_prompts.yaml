@@ -1,3 +1,4 @@
+# Clinician chooses whether to keep or change the initial decision
 simulator_base_decision_prompt: |
   [Role]
   You are a senior clinician who has already formed a confident initial decision and engaged in a discussion with an AI assistant.

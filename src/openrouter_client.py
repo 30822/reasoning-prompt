@@ -1,4 +1,4 @@
-# src/openrouter_client.py
+"""LLM routing: openai/* via OpenAI API, all other models via OpenRouter."""
 import asyncio
 import re
 from typing import Optional, List, Dict, Any, Callable, Awaitable
@@ -7,26 +7,18 @@ from openai import AsyncOpenAI
 from src.utils import get_openrouter_key, call_llm_openai
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-
-# \u2028 LINE SEPARATOR, \u2029 PARAGRAPH SEPARATOR, \u0085 NEXT LINE
-# -> \n for reproducibility (avoids "unusual line terminators" in JSON)
 _LINE_TERM_PATTERN = re.compile(r"[\u2028\u2029\u0085]")
-
-
-def _sanitize_line_terminators(text: str) -> str:
-    """Replace Unicode line separators with standard \\n."""
-    if not text:
-        return text
-    return _LINE_TERM_PATTERN.sub("\n", text)
 _client: Optional[AsyncOpenAI] = None
 
 
+def _sanitize_line_terminators(text: str) -> str:
+    if not text:
+        return text
+    return _LINE_TERM_PATTERN.sub("\n", text)
+
+
 def get_llm_caller(model_name: str) -> Callable[..., Awaitable[str]]:
-    """
-    Returns the appropriate LLM caller based on model prefix:
-      - openai/* -> call_llm_openai (OpenAI API direct)
-      - else     -> call_llm (OpenRouter)
-    """
+    """Return the async chat-completion caller for this model name."""
     m = (model_name or "").strip()
     if m.startswith("openai/"):
         return call_llm_openai
@@ -37,10 +29,8 @@ def get_client(timeout_s: float = 120.0) -> AsyncOpenAI:
     global _client
     if _client is not None:
         return _client
-
-    key = get_openrouter_key()
     _client = AsyncOpenAI(
-        api_key=key,
+        api_key=get_openrouter_key(),
         base_url=_DEFAULT_BASE_URL,
         http_client=httpx.AsyncClient(timeout=timeout_s),
     )
@@ -56,15 +46,8 @@ async def call_llm(
     response_format: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> str:
-    """
-    Standard chat-completions wrapper with retry.
-    - response_format이 지원되지 않는 모델/라우터면 자동으로 제거하고 재시도
-    - max_retries 같은 값이 kwargs로 와도 create()에 전달하지 않음(내부 retries로만 제어)
-    """
     client = get_client()
     last_err: Optional[Exception] = None
-
-    # 절대 create에 넘기면 안 되는 것들 (네가 겪은 max_retries 이슈 방지)
     kwargs.pop("max_retries", None)
     kwargs.pop("retries", None)
 
@@ -78,30 +61,21 @@ async def call_llm(
     for i in range(retries):
         try:
             payload = dict(base_payload)
-
-            # 1) response_format 먼저 시도
             if response_format is not None:
                 payload["response_format"] = response_format
-
-            # 2) 기타 옵션
             payload.update(kwargs)
-
             resp = await client.chat.completions.create(**payload)
             raw = resp.choices[0].message.content or ""
             return _sanitize_line_terminators(raw)
-
         except TypeError as e:
-            # response_format 미지원(또는 OpenAI SDK/Router에서 인자 거부) 시 fallback
             msg = str(e).lower()
             if response_format is not None and ("response_format" in msg or "unexpected keyword" in msg):
-                # response_format 없이 재시도
                 response_format = None
                 last_err = e
                 await asyncio.sleep(2 ** i)
                 continue
             last_err = e
             await asyncio.sleep(2 ** i)
-
         except Exception as e:
             last_err = e
             await asyncio.sleep(2 ** i)

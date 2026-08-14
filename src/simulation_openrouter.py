@@ -1,3 +1,7 @@
+"""Two-turn clinician–AI simulation under the 4x4 prompt matrix.
+
+Each case is run in both `correct` and `error` belief conditions.
+"""
 import json
 import asyncio
 import random
@@ -6,15 +10,8 @@ from pathlib import Path
 from tqdm import tqdm
 from src.openrouter_client import get_llm_caller
 import re
-import time
-from json import JSONDecodeError
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 import argparse
-
-
-# ======================
-# Path / Prompt Utilities
-# ======================
 
 def _get_project_root() -> Path:
     current_file = Path(__file__).resolve()
@@ -34,12 +31,7 @@ def _load_prompts() -> dict:
 PROMPTS = _load_prompts()
 
 def _sanitize_filename(s: str) -> str:
-    # openai/o1 -> openai_o1
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", s)
-
-# ======================
-# experiments.yaml loader
-# ======================
 
 def _load_experiments_yaml() -> dict:
     project_root = _get_project_root()
@@ -52,14 +44,7 @@ def _load_experiments_yaml() -> dict:
 EXPERIMENTS_YAML = _load_experiments_yaml()
 
 def _get_model_short_id(model_full_name: str) -> str:
-    """
-    experiments.yaml 'models' mapping is the single source of truth:
-      models:
-        o1: openai/o1
-        r1: deepseek/deepseek-r1
-        ...
-    We invert it here.
-    """
+    """Invert experiments.yaml models map: 'openai/o3' -> 'o3'."""
     models_map = EXPERIMENTS_YAML.get("models", {})
     if not models_map:
         raise ValueError("No 'models' mapping in resources/experiments.yaml")
@@ -74,16 +59,7 @@ def _get_model_short_id(model_full_name: str) -> str:
     return short
 
 def _load_experiments_for_model(model_full_name: str) -> List[dict]:
-    """
-    Load only the 16 experiments for the given model, and normalize into
-    simulation format:
-      {
-        "experiment_id": <id>,
-        "label": <id>,
-        "turn1_key": "T1_<t1>",
-        "turn2_key": "T2_<t2>",
-      }
-    """
+    """Load the 16 prompt cells (P1–P16) for one target model."""
     short = _get_model_short_id(model_full_name)
 
     exps = EXPERIMENTS_YAML.get("experiments", [])
@@ -147,39 +123,6 @@ def _render_ai_user_prompt_turn2(
     )
 
 
-# ======================
-# Retry
-# ======================
-
-def _is_retryable_error(err: Exception) -> bool:
-    # JSON decode errors from broken provider responses should be retried
-    if isinstance(err, JSONDecodeError):
-        return True
-
-    msg = (str(err) or "").lower()
-
-    transient_markers = [
-        "rate limit", "429",
-        "timeout", "timed out",
-        "overloaded",
-        "temporarily unavailable",
-        "service unavailable", "503",
-        "502", "bad gateway",
-        "gateway timeout", "504",
-        "connection reset", "connection aborted",
-        "network", "server error", "internal error",
-        # NEW: JSON parse failure patterns
-        "expecting value",            # JSONDecodeError message pattern
-        "jsondecodeerror",
-        "invalid json",
-    ]
-    return any(m in msg for m in transient_markers)
-
-
-# ======================
-# Simulation Core
-# ======================
-
 async def run_single_simulation(
     target_model: str,
     experiment: dict,
@@ -189,6 +132,7 @@ async def run_single_simulation(
     simulator_model: str,
     max_retries: int,
 ) -> Optional[dict]:
+    """One 2-turn dialogue. mode is `correct` or `error` (simulator belief)."""
     async with semaphore:
         try:
             if mode == "error":
@@ -215,7 +159,6 @@ async def run_single_simulation(
             def _call_llm(model_name: str, messages, **kwargs):
                 return get_llm_caller(model_name)(model_name=model_name, messages=messages, **kwargs)
 
-            # [Turn 1] Simulator
             sim_msg_1 = await _call_llm(
                 model_name=simulator_model,
                 messages=[
@@ -234,7 +177,6 @@ async def run_single_simulation(
             )
             history.append({"role": "Doctor", "content": sim_msg_1})
 
-            # [Turn 1] Target AI
             ai_turn1_user = _render_ai_user_prompt_turn1(
                 experiment,
                 scenario_text=scenario_text,
@@ -252,7 +194,6 @@ async def run_single_simulation(
             )
             history.append({"role": "AI", "content": ai_msg_1})
 
-            # [Turn 2] Simulator (Rebuttal)
             sim_msg_2 = await _call_llm(
                 model_name=simulator_model,
                 messages=[
@@ -274,7 +215,6 @@ async def run_single_simulation(
             )
             history.append({"role": "Doctor", "content": sim_msg_2})
 
-            # [Turn 2] Target AI
             ai_turn2_user = _render_ai_user_prompt_turn2(
                 experiment,
                 scenario_text=scenario_text,
@@ -310,7 +250,6 @@ async def run_single_simulation(
 
 
 def _log_key(log: dict) -> tuple:
-    """Unique key for (case_id, experiment_id, mode)."""
     return (
         str(log.get("case_id", "")),
         str(log.get("experiment_id", log.get("experiment_label", ""))),
@@ -334,7 +273,6 @@ async def simulate_model_all_experiments(
     logs: list = list(existing_logs or [])
     save_lock = asyncio.Lock()
 
-    # Build work items: (exp, case, mode) not yet done
     work_items: list[tuple[dict, dict, str]] = []
     for exp in experiments:
         for case in dataset:
@@ -380,12 +318,7 @@ async def simulate_model_all_experiments(
     return {"model_name": model_name, "logs": logs}
 
 
-# ======================
-# Runner
-# ======================
-
 def _by_model_dir() -> Path:
-    # output/simulation/by_model
     return _get_output_root() / "simulation" / "by_model"
 
 def _model_output_path(model_name: str) -> Path:
@@ -406,6 +339,7 @@ async def run_simulation(
     output_file: str | None = None,
     resume: bool = True,
 ):
+    """Run all 16 cells x 2 belief conditions for each target model."""
     input_path = Path(input_file)
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -413,7 +347,6 @@ async def run_simulation(
     with open(input_path, "r", encoding="utf-8") as f:
         cases = json.load(f)
 
-    # you want --model only: target_models must be 1 item typically
     if not target_models:
         raise ValueError("No target model provided. Use --model <provider/model>.")
 
@@ -484,7 +417,7 @@ async def run_simulation(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", action="append", required=True,
-                        help="Target model full name (e.g., openai/o1). Can be repeated.")
+                        help="Target model full name (e.g., openai/o3). Can be repeated.")
     parser.add_argument("--input_file", required=True)
     parser.add_argument("--mode", choices=["correct", "error"], default="correct")
     parser.add_argument("--simulator_model", required=True)
@@ -492,7 +425,6 @@ if __name__ == "__main__":
     parser.add_argument("--max_retries", type=int, default=3)
     parser.add_argument("--no-resume", action="store_true", help="Start fresh, ignore checkpoint")
 
-    # compatibility with run_openrouter.sh (so we can write output/simulation/<output_file>)
     parser.add_argument("--output_file", default=None)
 
     args = parser.parse_args()

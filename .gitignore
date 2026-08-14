@@ -13,14 +13,6 @@ venv/
 
 # Outputs (Huge + Private)
 output/
-logs/
-experiments/
-output_gate/
-analysis/
-resources/experments_gate.yaml
-scripts/merge_json_cases.py
-etc/
-scripts/analysis.ipynb
 run.log
 
 # API Keys

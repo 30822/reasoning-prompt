@@ -1,9 +1,10 @@
+"""Clinician final decision after the 2-turn dialogue (team performance)."""
 import json
 import asyncio
 import re
 import yaml
-import pandas as pd
 from pathlib import Path
+from typing import Optional
 from src.openrouter_client import get_llm_caller
 from tqdm import tqdm
 
@@ -65,7 +66,6 @@ def parse_final_answer(text: str) -> str:
 
     t = text.strip()
 
-    # 가장 강한 패턴 우선
     m = re.search(r"Final\s*Answer\s*:\s*\[\[?\s*([A-D])\s*\]?\]", t, flags=re.IGNORECASE)
     if m:
         return m.group(1).upper()
@@ -74,7 +74,6 @@ def parse_final_answer(text: str) -> str:
     if m:
         return m.group(1).upper()
 
-    # fallback: 마지막 줄에서 A-D 추출
     lines = t.splitlines()
     last_line = lines[-1] if lines else t
     m2 = re.search(r"\b([A-D])\b", last_line, flags=re.IGNORECASE)
@@ -87,16 +86,6 @@ def parse_reasoning(text: str) -> str:
     if m:
         return m.group(1).strip()
     return t[:300]
-
-def load_dataset(dataset_file: str) -> list[dict]:
-    project_root = _get_project_root()
-    p = Path(dataset_file)
-    if not p.is_absolute():
-        p = project_root / dataset_file
-    if not p.exists():
-        raise FileNotFoundError(f"Dataset file not found: {p}")
-    with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 async def recalc_one_log(
@@ -161,53 +150,36 @@ async def process_model(
     simulator_model: str,
     resume: bool = True,
 ) -> dict:
-    """
-    For each log (case_id × mode × experiment_id), run team decision judge and
-    annotate:
-      - final_decision
-      - reasoning
-      - is_team_correct
-      - decision_reasoning (raw LLM output)
-
-    Keeps experiment_id/label as-is so downstream (medcobe.py) can groupby exp_id
-    and produce 16 rows per model.
-    """
-
     logs = model_data.get("logs", [])
     if not logs:
         return model_data
 
     def _case_key_from_log(log: dict) -> str:
-        # dataset_dict is keyed by str(case_id)
         cid = log.get("case_id")
         return "" if cid is None else str(cid)
 
     def _already_done(log: dict) -> bool:
-        # resume: if team judgment already exists, skip
         if not resume:
             return False
         if log.get("is_team_correct") is None:
             return False
-        # 최소한 final_decision도 있으면 done으로 간주
         if log.get("final_decision") is None:
             return False
         return True
 
-    # 1) task 생성 (원래 logs 순서를 유지하기 위해 인덱스를 저장)
     tasks: list[tuple[int, asyncio.Future] | None] = []
     valid_mask: list[bool] = []
 
     for i, log in enumerate(logs):
         if _already_done(log):
             tasks.append(None)
-            valid_mask.append(False)  # 그대로 유지
+            valid_mask.append(False)
             continue
 
         case_key = _case_key_from_log(log)
         case_data = dataset_dict.get(case_key)
 
         if not case_data:
-            # case_id 매칭 실패: 로그는 그대로 두되, 디버깅용 마커만 남김(원하면 제거 가능)
             log["_team_eval_error"] = f"case_id not found in dataset: {case_key}"
             tasks.append(None)
             valid_mask.append(False)
@@ -216,7 +188,6 @@ async def process_model(
         tasks.append((i, recalc_one_log(log, case_data, semaphore, simulator_model)))
         valid_mask.append(True)
 
-    # 2) 실행 (동시성: semaphore는 recalc_one_log 내부에서 사용)
     indexed_results: dict[int, dict | Exception] = {}
 
     coros = [(i, coro) for (i, coro) in tasks if (i is not None and coro is not None)]  # type: ignore
@@ -236,10 +207,8 @@ async def process_model(
                 indexed_results[idx] = r
                 pbar.update(1)
 
-    # 3) 결과 merge (원래 logs 순서 유지)
     updated_logs: list[dict] = []
     for i, log in enumerate(logs):
-        # 이미 done/invalid는 원본 유지
         if i not in indexed_results:
             updated_logs.append(log)
             continue
@@ -254,7 +223,6 @@ async def process_model(
             updated_logs.append(log)
             continue
 
-        # r is dict from recalc_one_log
         new_log = dict(log)
         new_log["final_decision"] = r.get("final_decision", "Unknown")
         new_log["reasoning"] = r.get("reasoning", "")
@@ -262,7 +230,6 @@ async def process_model(
         new_log["decision_reasoning"] = r.get("decision_reasoning", "")
         updated_logs.append(new_log)
 
-    # 4) model-level 요약값
     total_logs = len(updated_logs)
     correct_count = sum(1 for log in updated_logs if log.get("is_team_correct") is True)
     team_accuracy = (correct_count / total_logs) if total_logs else 0.0
@@ -293,11 +260,13 @@ async def recalculate_final_decision_by_model_dir(
     simulator_model: str,
     max_concurrent_requests: int = 10,
     resume: bool = True,
+    simulation_by_model_dir: Optional[str | Path] = None,
+    team_by_model_dir: Optional[str | Path] = None,
 ):
+    """Score the clinician's post-dialogue choice for each simulation log."""
 
     project_root = _get_project_root()
 
-    # dataset
     dataset_path = Path(dataset_file)
     if not dataset_path.is_absolute():
         dataset_path = project_root / dataset_file
@@ -308,11 +277,21 @@ async def recalculate_final_decision_by_model_dir(
         dataset_list = json.load(f)
     dataset_dict = {str(item.get("case_id")): item for item in dataset_list}
 
-    sim_dir = _simulation_by_model_dir()
+    if simulation_by_model_dir is None:
+        sim_dir = _simulation_by_model_dir()
+    else:
+        sim_dir = Path(simulation_by_model_dir)
+        if not sim_dir.is_absolute():
+            sim_dir = project_root / sim_dir
     if not sim_dir.exists():
         raise FileNotFoundError(f"Simulation by_model dir not found: {sim_dir}")
 
-    out_dir = _team_by_model_dir()
+    if team_by_model_dir is None:
+        out_dir = _team_by_model_dir()
+    else:
+        out_dir = Path(team_by_model_dir)
+        if not out_dir.is_absolute():
+            out_dir = project_root / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 80)
@@ -358,7 +337,6 @@ async def recalculate_final_decision_by_model_dir(
 
         print(f"   Saved: {out_path}")
 
-    # summary (out_dir 파일 기반)
     total_logs = 0
     total_correct = 0
     for p in sorted(out_dir.glob("*.json")):
@@ -378,18 +356,25 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser()
-    p.add_argument("--sim-dir", required=True, help="output/simulation/by_model")
+    p.add_argument("--sim-dir", required=True, help="e.g. output/simulation/by_model")
+    p.add_argument(
+        "--team-dir",
+        default=None,
+        help="defaults to output/team/by_model",
+    )
     p.add_argument("--dataset", required=True, help="path to dataset json")
     p.add_argument("--simulator-model", required=True)
     p.add_argument("--max-concurrency", type=int, default=10)
     p.add_argument("--no-resume", action="store_true")
     args = p.parse_args()
 
-    recalculate_final_decision_by_model_dir(
-        input_dir=args.sim_dir,
-        dataset_file=args.dataset,
-        simulator_model=args.simulator_model,
-        max_concurrent=args.max_concurrency,
-        resume=(not args.no_resume),
+    asyncio.run(
+        recalculate_final_decision_by_model_dir(
+            dataset_file=args.dataset,
+            simulator_model=args.simulator_model,
+            max_concurrent_requests=args.max_concurrency,
+            resume=(not args.no_resume),
+            simulation_by_model_dir=args.sim_dir,
+            team_by_model_dir=args.team_dir,
+        )
     )
-    

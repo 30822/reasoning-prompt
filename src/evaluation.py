@@ -1,20 +1,17 @@
-# <src/evaluation.py>
+"""Turn-level LLM judge: ARGUE/ACCEPT and VALID/INVALID on each AI utterance."""
 import json
 import asyncio
 import yaml
 from pathlib import Path
 from src.openrouter_client import get_llm_caller
 from tqdm import tqdm
-from typing import Dict, Any
+from typing import Any
 import re
 import os
 
 
 def _get_project_root():
-    """return the project root"""
-    current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent
-    return project_root
+    return Path(__file__).resolve().parent.parent
 
 
 def _load_prompts():
@@ -64,10 +61,6 @@ _ALLOWED_ERROR_TYPES = {
 
 
 def _normalize_error_type(x: str):
-    """
-    Expect x to be list[str] or str.
-    Return list[str] with normalized tags.
-    """
     if x is None:
         return ["NONE"]
 
@@ -106,15 +99,13 @@ def _safe_json_load(s: str) -> dict:
     if not s:
         return {}
 
-    s = s.strip().lstrip("\ufeff")  # BOM 제거
+    s = s.strip().lstrip("\ufeff")
 
-    # 1. 그대로 파싱
     try:
         return json.loads(s)
     except Exception:
         pass
 
-    # 2. ```json ... ``` 블록 추출 (개행 포함)
     for pat in [r"```(?:json)?\s*([\s\S]*?)```", r"```\s*([\s\S]*?)```"]:
         m = re.search(pat, s, re.IGNORECASE)
         if m:
@@ -123,7 +114,6 @@ def _safe_json_load(s: str) -> dict:
             except Exception:
                 pass
 
-    # 3. { } 밖의 접두/접미 제거
     s = re.sub(r"^[^{]*", "", s, count=1)
     s = re.sub(r"[^{]*$", "", s)
     try:
@@ -131,7 +121,6 @@ def _safe_json_load(s: str) -> dict:
     except Exception:
         pass
 
-    # 4. 첫 번째 {...} 블록 추출
     m = re.search(r"\{.*\}", s, flags=re.DOTALL)
     if m:
         try:
@@ -159,30 +148,11 @@ def _exp_key(log: dict):
 def _is_empty_utterance(text: str) -> bool:
     if text is None:
         return True
-    # 공백/개행만 있는 경우도 empty로 취급
     return len(text.strip()) == 0
 
 
-# 프롬프트 길이 제한 (Judge 컨텍스트 초과 방지)
-# 요청에 따라 현재는 제한을 사용하지 않음.
-# _MAX_SCENARIO_CHARS = 3500
-# _MAX_RATIONALE_CHARS = 3500
-# _MAX_DIALOGUE_CONTEXT_CHARS = 4000
-# _MAX_AI_UTTERANCE_CHARS = 2000
-
-
-def _truncate_tail(text: str | None, max_chars: int) -> str:
-    if not text:
-        return ""
-    s = str(text).strip()
-    return s[-max_chars:] if len(s) > max_chars else s
-
-
-# Judge 파싱 실패 경고 throttle
 _judge_parse_fail_count = 0
-_judge_parse_warn_threshold = 5  # 처음 5회만 출력, 이후 50회마다
-
-# OpenRouter용 strict JSON schema (Gemini 등 출력 강제)
+_judge_parse_warn_threshold = 5  # print first 5 failures, then every 50th
 _JUDGE_JSON_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -207,7 +177,7 @@ _JUDGE_JSON_SCHEMA = {
 
 
 def _judge_response_format(judge_model: str) -> dict:
-    """OpenAI 직접 API는 json_object, OpenRouter(Gemini 등)는 strict json_schema."""
+    """json_object for OpenAI; strict json_schema for OpenRouter models."""
     if (judge_model or "").strip().startswith("openai/"):
         return {"type": "json_object"}
     return _JUDGE_JSON_SCHEMA
@@ -221,13 +191,6 @@ async def evaluate_single_utterance_combined(
     keep_judge_raw: bool = False,
     use_openai_judge: bool = False,
 ) -> dict[str, Any]:
-    """
-    Returns ONLY the canonical keys used by the original medcobe.py:
-      - action: {ARGUE, ACCEPT}
-      - validity: {VALID, INVALID}
-    Plus brief_reason / error_type for analysis.
-    judge_raw/judge_parsed are optional (disabled by default) to reduce file size.
-    """
     global _judge_parse_fail_count
     ground_truth_answer = (
         case_data.get("correct_option")
@@ -235,15 +198,10 @@ async def evaluate_single_utterance_combined(
         or case_data.get("ground_truth")
         or ""
     )
-    # 긴 컨텍스트 제한 비활성화: 원문 전체 사용
-    # scenario = _truncate_tail(case_data.get("scenario"), _MAX_SCENARIO_CHARS)
     scenario = case_data.get("scenario") or ""
     image_caption = case_data.get("caption") or ""
-    # rationale = _truncate_tail(case_data.get("explanation"), _MAX_RATIONALE_CHARS)
     rationale = case_data.get("explanation") or ""
-    # dialogue_context = _truncate_tail(dialogue_context, _MAX_DIALOGUE_CONTEXT_CHARS)
     dialogue_context = dialogue_context or ""
-    # ai_utterance_trunc = _truncate_tail(ai_utterance, _MAX_AI_UTTERANCE_CHARS)
     ai_utterance_trunc = ai_utterance or ""
 
     judge_prompt = PROMPTS["judge_user_prompt"].format(
@@ -255,13 +213,12 @@ async def evaluate_single_utterance_combined(
         ai_utterance=ai_utterance_trunc,
     )
 
-    # judge_prompt의 json 강제 지시 추가
     judge_prompt += "\n\nIMPORTANT: Return ONLY a valid JSON object with keys: action, validity, brief_reason, error_type. Do not output any explanation outside JSON."
 
     if _is_empty_utterance(ai_utterance):
             return {
-                "action": "ACCEPT",          # safe default
-                "validity": "INVALID",       # conservative default
+                "action": "ACCEPT",
+                "validity": "INVALID",
                 "brief_reason": "No response",
                 "error_type": ["NONE"],
             }
@@ -285,13 +242,8 @@ async def evaluate_single_utterance_combined(
         if not parsed or "action" not in parsed or "validity" not in parsed:
             _judge_parse_fail_count += 1
             if _judge_parse_fail_count <= _judge_parse_warn_threshold or _judge_parse_fail_count % 50 == 0:
-                print(f"[WARN] Judge parse failure #{_judge_parse_fail_count}. Retrying with truncated context...")
+                print(f"[WARN] Judge parse failure #{_judge_parse_fail_count}. Retrying...")
 
-            # 재시도에서도 길이 제한 비활성화: 동일 원문 사용
-            # scenario_retry = _truncate_tail(scenario, 2000)
-            # rationale_retry = _truncate_tail(rationale, 2000)
-            # dialogue_context_retry = _truncate_tail(dialogue_context, 2000)
-            # ai_retry = _truncate_tail(ai_utterance_trunc, 1000)
             scenario_retry = scenario
             rationale_retry = rationale
             dialogue_context_retry = dialogue_context
@@ -346,8 +298,8 @@ async def evaluate_single_utterance_combined(
         if _judge_parse_fail_count <= _judge_parse_warn_threshold or _judge_parse_fail_count % 50 == 0:
             print(f"[WARN] Judge error (fallback used) #{_judge_parse_fail_count}: {e}")
         out = {
-            "action": "ACCEPT",          # safe default
-            "validity": "INVALID",       # conservative default
+            "action": "ACCEPT",
+            "validity": "INVALID",
             "brief_reason": "Judge error/fallback",
             "error_type": ["NONE"],
         }
@@ -400,9 +352,6 @@ async def evaluate_dialogue_overall(
     keep_judge_raw: bool = False,
     use_openai_judge: bool = False,
 ) -> dict:
-    """
-    collaboration outcome, failure modes, error type evaluation
-    """
     ground_truth_answer = (
         case_data.get("correct_option")
         or case_data.get("answer")
@@ -458,7 +407,6 @@ async def evaluate_dialogue_overall(
         }
 
 
-# team_results와 중복되는 키 (annotated_output에서 제외 가능, is_team_correct는 medcobe용으로 유지)
 _REDUNDANT_TEAM_KEYS = ("ground_truth", "target_belief", "final_decision", "reasoning", "decision_reasoning")
 
 
@@ -473,11 +421,6 @@ async def evaluate_and_annotate_dialogue(
     use_openai_judge: bool = False,
     skip_dialogue_level_judge: bool = False,
 ) -> dict:
-    """
-    Annotates each AI turn with:
-      - action, validity, brief_reason, error_type
-    Removes any legacy duplicated keys if present.
-    """
     dialogue = log_data.get("dialogue", [])
     dialogue_text = _build_dialogue_text(dialogue)
 
@@ -508,13 +451,11 @@ async def evaluate_and_annotate_dialogue(
                 use_openai_judge=use_openai_judge,
             )
 
-            # Canonical keys
             turn_copy["action"] = eval_result["action"]
             turn_copy["validity"] = eval_result["validity"]
             turn_copy["brief_reason"] = eval_result["brief_reason"]
             turn_copy["error_type"] = eval_result["error_type"]
 
-            # Optional raw
             if keep_judge_raw:
                 turn_copy["judge_raw"] = eval_result.get("judge_raw", "")
                 turn_copy["judge_parsed"] = eval_result.get("judge_parsed", {})
@@ -524,7 +465,6 @@ async def evaluate_and_annotate_dialogue(
     annotated_log = log_data.copy()
     annotated_log["dialogue"] = annotated_dialogue
 
-    # turn_level summary (redundant, off by default)
     if keep_turn_level_summary:
         t1 = None
         t2 = None
@@ -584,9 +524,10 @@ async def run_evaluation(
     use_openai_judge: bool = False,
     skip_dialogue_level_judge: bool = False,
 ):
+    """Annotate team logs with judge labels and write annotated_results.json."""
     project_root = _get_project_root()
 
-    output_root = project_root / os.environ.get("MEDCOBE_OUTPUT_ROOT", "output")
+    output_root = project_root / os.environ.get("PCOLLAB_OUTPUT_ROOT", "output")
     output_root.mkdir(parents=True, exist_ok=True)
 
     team_result_path = Path(team_result_file)

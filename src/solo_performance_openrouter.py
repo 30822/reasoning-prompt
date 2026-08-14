@@ -1,7 +1,9 @@
+"""Solo MCQ accuracy: the AI answers each case without a clinician partner."""
 import json
 import re
 import asyncio
 from pathlib import Path
+from typing import Optional
 from src.openrouter_client import get_llm_caller
 from tqdm import tqdm
 import time
@@ -127,14 +129,21 @@ async def run_solo_performance(
     output_file: str,
     models_to_test: list,
     max_concurrent_requests: int = 10,
+    solo_by_model_dir: Optional[str | Path] = None,
 ):
+    """Evaluate listed models on the dataset and write per-model JSON."""
     
     project_root = _get_project_root()
 
     output_root = project_root / "output"
     output_root.mkdir(parents=True, exist_ok=True)
 
-    solo_dir = output_root / "solo" / "by_model"
+    if solo_by_model_dir is None:
+        solo_dir = output_root / "solo" / "by_model"
+    else:
+        solo_dir = Path(solo_by_model_dir)
+        if not solo_dir.is_absolute():
+            solo_dir = project_root / solo_dir
     solo_dir.mkdir(parents=True, exist_ok=True)
 
     input_path = Path(input_file)
@@ -206,7 +215,7 @@ async def run_solo_performance(
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "model_name": model,        # deepseek/deepseek-r1 형태 유지
+                    "model_name": model,
                     "accuracy": accuracy,
                     "correct_count": correct_count,
                     "total_cases": len(dataset),

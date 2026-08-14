@@ -1,0 +1,11 @@
+# Copy this file to conf.yaml and insert your keys.
+#   cp conf.d/conf.example conf.d/conf.yaml
+#
+# openai/* models are called via the OpenAI API.
+# All other models are called via OpenRouter.
+
+openai:
+  key: YOUR_OPENAI_API_KEY
+
+openrouter:
+  key: YOUR_OPENROUTER_API_KEY
