@@ -1,6 +1,6 @@
 """Compute Pcollab from judged dialogues.
 
-Pcollab is the geometric mean of valid argumentation (error condition) and
+Pcollab is the geometric mean of valid argumentation (incorrect condition) and
 valid acceptance (correct condition). Cells are labeled P1–P16.
 """
 import json
@@ -133,7 +133,7 @@ def calculate_collaborative_performance(
                 if len(ai_utterances) == 0:
                     continue
 
-                if mode == "error":
+                if mode == "incorrect":
                     total_ai_utterances_error += len(ai_utterances)
                     for action, validity in ai_utterances:
                         if action == "ARGUE" and validity == "VALID":

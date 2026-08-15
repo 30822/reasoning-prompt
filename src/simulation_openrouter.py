@@ -1,6 +1,6 @@
 """Two-turn clinician–AI simulation under the 4x4 prompt matrix.
 
-Each case is run in both `correct` and `error` belief conditions.
+Each case is run in both `correct` and `incorrect` belief conditions.
 """
 import json
 import asyncio
@@ -132,10 +132,10 @@ async def run_single_simulation(
     simulator_model: str,
     max_retries: int,
 ) -> Optional[dict]:
-    """One 2-turn dialogue. mode is `correct` or `error` (simulator belief)."""
+    """One 2-turn dialogue. mode is `correct` or `incorrect` (simulator belief)."""
     async with semaphore:
         try:
-            if mode == "error":
+            if mode == "incorrect":
                 if not case.get("distractors"):
                     return None
                 target_belief = random.choice(case["distractors"])
@@ -276,11 +276,11 @@ async def simulate_model_all_experiments(
     work_items: list[tuple[dict, dict, str]] = []
     for exp in experiments:
         for case in dataset:
-            for mode in ("error", "correct"):
+            for mode in ("incorrect", "correct"):
                 key = (str(case.get("case_id", "")), str(exp["experiment_id"]), mode)
                 if key in done_keys:
                     continue
-                if mode == "error" and not case.get("distractors"):
+                if mode == "incorrect" and not case.get("distractors"):
                     continue
                 work_items.append((exp, case, mode))
 
@@ -419,7 +419,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", action="append", required=True,
                         help="Target model full name (e.g., openai/o3). Can be repeated.")
     parser.add_argument("--input_file", required=True)
-    parser.add_argument("--mode", choices=["correct", "error"], default="correct")
+    parser.add_argument("--mode", choices=["correct", "incorrect"], default="correct")
     parser.add_argument("--simulator_model", required=True)
     parser.add_argument("--max_concurrent", type=int, default=10)
     parser.add_argument("--max_retries", type=int, default=3)

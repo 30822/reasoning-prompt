@@ -1,10 +1,12 @@
 # Structured Reasoning Prompts Improve Clinician–AI Collaboration: A Controlled Simulation Study
 
+![Figure 1](fig1.png)
+
 Code accompanying the paper:
 
 > **Structured Reasoning Prompts Improve Clinician–AI Collaboration: A Controlled Simulation Study**
 
-This repository implements a controlled two-turn simulation of clinician–AI collaboration. A clinician simulator holds either a **correct** or an **incorrect** initial belief; an AI partner responds under a 4 × 4 matrix of structured reasoning prompts. Dialogues are judged turn-by-turn, and collaboration quality is summarized with **Pcollab**.
+This repository implements a controlled two-turn simulation of clinician–AI collaboration. A clinician simulator holds either a **correct** or an **incorrect** initial belief; an AI partner responds under a 4 × 4 matrix of structured reasoning prompts. Dialogues are judged turn-by-turn, and collaboration quality is summarized with **$P_\text{collab}$**.
 
 Target models in this release: **openai/o3** and **deepseek/deepseek-r1-0528**.
 
@@ -17,20 +19,20 @@ Each case is run in two belief conditions:
 | Condition | Clinician simulator belief |
 |-----------|----------------------------|
 | `correct` | Ground-truth option |
-| `error`   | A distractor option |
+| `incorrect`   | A distractor option |
 
 The AI partner is prompted with one cell of a **4 × 4** design:
 
-| Turn 1 \ Turn 2 | B | B+CL | B+SR | B+CL+SR |
+| Turn 1 \ Turn 2 | B | CL | SR | CL+SR |
 |-----------------|---|------|------|---------|
 | **B** | P1 | P2 | P3 | P4 |
-| **B+CoT** | P5 | P6 | P7 | P8 |
-| **B+CL** | P9 | P10 | P11 | P12 |
-| **B+CoT+CL** | P13 | P14 | P15 | P16 |
+| **CoT** | P5 | P6 | P7 | P8 |
+| **CL** | P9 | P10 | P11 | P12 |
+| **CoT+CL** | P13 | P14 | P15 | P16 |
 
 - **B**: baseline reply  
 - **CoT**: chain-of-thought  
-- **CL**: safety/evidence checklist  
+- **CL**: checklist
 - **SR**: self-revision  
 
 The pipeline is:
@@ -66,6 +68,7 @@ cases JSON
     ├── team_performance_openrouter.py
     ├── evaluation.py
     ├── collaborative_performance.py
+    ├── analysis.py                     # bootstrap, permutation, component, interaction, correlation
     ├── openrouter_client.py
     └── utils.py
 ```
@@ -121,7 +124,7 @@ The study used JAMA Clinical Challenge multiple-choice cases. **Full case text i
 }
 ```
 
-`case_id` must be unique. `distractors` are required for the `error` belief condition.
+`case_id` must be unique. `distractors` are required for the `incorrect` belief condition.
 
 ---
 
@@ -159,7 +162,7 @@ Or run one model at a time:
 ./scripts/run_openrouter.sh pcollab --model deepseek/deepseek-r1-0528 --input path/to/your_cases.json
 ```
 
-Model identifiers must match `resources/experiments.yaml` (`models:`). Each listed model has **16** cells (P1–P16); the simulator always runs both `correct` and `error` beliefs.
+Model identifiers must match `resources/experiments.yaml` (`models:`). Each listed model has **16** cells (P1–P16); the simulator always runs both `correct` and `incorrect` beliefs.
 
 ### Individual stages
 
@@ -189,9 +192,32 @@ All artifacts are written under `output/` (gitignored):
 
 CSV columns: `Model`, `Experiment` (P1–P16), `N_dialogues_judged`, `Solo Accuracy`, `Team Accuracy`, `Valid Argumentation`, `Valid Acceptance`, `Pcollab`.
 
-- **Valid Argumentation:** share of AI turns in the `error` condition labeled `ARGUE` and `VALID`  
+- **Valid Argumentation:** share of AI turns in the `incorrect` condition labeled `ARGUE` and `VALID`  
 - **Valid Acceptance:** share of AI turns in the `correct` condition labeled `ACCEPT` and `VALID`  
 - **Pcollab:** geometric mean of valid argumentation and valid acceptance  
+
+---
+
+## Analysis
+
+After judging, run the statistical analyses from `src/analysis.py` (no figures):
+
+```bash
+python src/analysis.py \
+  --annotated output/evaluation/annotated_results.json \
+  --out-dir output/analysis
+```
+
+Defaults match the paper setting: 20,000 bootstrap draws and 50,000 permutations vs **P1**, seed 42. Use `--model` to restrict to one model key; `--n-boot` / `--n-perm` to change resampling size.
+
+| Output | Contents |
+|--------|----------|
+| `output/analysis/bootstrap_permutation.csv` | Paired bootstrap CI and permutation tests vs P1 (Holm-adjusted) |
+| `output/analysis/component_level.csv` | Matched-pair component effects (CoT, CL1, CL2, SR) |
+| `output/analysis/interaction.csv` | Two-way cell means and interaction contrasts |
+| `output/analysis/correlation.csv` | Spearman / Kendall correlation of prompt effects across models |
+
+Each table reports **Pcollab**, **Valid Argumentation**, and **Valid Acceptance**. Correlation requires at least two models in the annotated file. 
 
 ---
 

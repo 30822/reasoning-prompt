@@ -234,12 +234,12 @@ async def process_model(
     correct_count = sum(1 for log in updated_logs if log.get("is_team_correct") is True)
     team_accuracy = (correct_count / total_logs) if total_logs else 0.0
 
-    error_mode_logs = [log for log in updated_logs if log.get("mode") == "error"]
+    incorrect_mode_logs = [log for log in updated_logs if log.get("mode") == "incorrect"]
     correct_mode_logs = [log for log in updated_logs if log.get("mode") == "correct"]
 
     correction_power = (
-        sum(1 for log in error_mode_logs if log.get("is_team_correct") is True) / len(error_mode_logs)
-        if error_mode_logs else 0.0
+        sum(1 for log in incorrect_mode_logs if log.get("is_team_correct") is True) / len(incorrect_mode_logs)
+        if incorrect_mode_logs else 0.0
     )
     confirmation_power = (
         sum(1 for log in correct_mode_logs if log.get("is_team_correct") is True) / len(correct_mode_logs)
