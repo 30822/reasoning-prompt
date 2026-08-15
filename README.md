@@ -194,7 +194,7 @@ CSV columns: `Model`, `Experiment` (P1–P16), `N_dialogues_judged`, `Solo Accur
 
 - **Valid Argumentation:** share of AI turns in the `incorrect` condition labeled `ARGUE` and `VALID`  
 - **Valid Acceptance:** share of AI turns in the `correct` condition labeled `ACCEPT` and `VALID`  
-- **Pcollab:** geometric mean of valid argumentation and valid acceptance  
+- **Pcollab:** geometric mean of valid argumentation and valid acceptance ($P_\text{collab}$)
 
 ---
 
@@ -217,7 +217,7 @@ Defaults match the paper setting: 20,000 bootstrap draws and 50,000 permutations
 | `output/analysis/interaction.csv` | Two-way cell means and interaction contrasts |
 | `output/analysis/correlation.csv` | Spearman / Kendall correlation of prompt effects across models |
 
-Each table reports **Pcollab**, **Valid Argumentation**, and **Valid Acceptance**. Correlation requires at least two models in the annotated file. 
+Each table reports **$P_\text{collab}$**, **Valid Argumentation**, and **Valid Acceptance**. Correlation requires at least two models in the annotated file. 
 
 ---
 
@@ -229,18 +229,3 @@ Each table reports **Pcollab**, **Valid Argumentation**, and **Valid Acceptance*
 - Judge prompt: `resources/prompt/evaluator_prompts.yaml`.
 
 The default clinician simulator is `openai/gpt-4o`. The default turn-level judge is `deepseek/deepseek-v3.2`. Both are set in `scripts/run_openrouter.sh`.
-
----
-
-## Citation
-
-If you use this code, please cite:
-
-> Structured Reasoning Prompts Improve Clinician–AI Collaboration: A Controlled Simulation Study.
-
-```
-@article{structured_reasoning_clinician_ai,
-  title   = {Structured Reasoning Prompts Improve Clinician--AI Collaboration: A Controlled Simulation Study},
-  year    = {2026}
-}
-```
