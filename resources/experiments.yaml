@@ -1,4 +1,4 @@
-# 4x4 prompt matrix. Each model has 16 cells (P1–P16).
+# 4x4 prompt matrix. Each model has 16 cells (P0–P15).
 # Turn 1: B, B_COT, B_CL, B_COT_CL
 # Turn 2: B, B_CL, B_SR, B_CL_SR
 

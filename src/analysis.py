@@ -1,7 +1,7 @@
 """Statistical analysis of judged clinician–AI dialogues.
 
 Writes four CSVs:
-  bootstrap_permutation.csv  — paired bootstrap CI and permutation tests vs P1
+  bootstrap_permutation.csv  — paired bootstrap CI and permutation tests vs P0
   component_level.csv        — matched-pair effects of CoT, CL1, CL2, SR
   interaction.csv            — two-way cell means and interaction contrasts
   correlation.csv            — rank correlation of prompt effects across models
@@ -25,25 +25,25 @@ from src.collaborative_performance import exp_id_to_pid, get_all_ai_utterances
 from src.utils import load_json_sanitized
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PIDS = [f"P{i}" for i in range(1, 17)]
+PIDS = [f"P{i}" for i in range(16)]
 COMPONENTS = ["CoT", "CL1", "CL2", "SR"]
 COMPONENT_MAP = {
-    "P1":  {"CoT": 0, "CL1": 0, "CL2": 0, "SR": 0},
-    "P2":  {"CoT": 0, "CL1": 0, "CL2": 1, "SR": 0},
-    "P3":  {"CoT": 0, "CL1": 0, "CL2": 0, "SR": 1},
-    "P4":  {"CoT": 0, "CL1": 0, "CL2": 1, "SR": 1},
-    "P5":  {"CoT": 1, "CL1": 0, "CL2": 0, "SR": 0},
-    "P6":  {"CoT": 1, "CL1": 0, "CL2": 1, "SR": 0},
-    "P7":  {"CoT": 1, "CL1": 0, "CL2": 0, "SR": 1},
-    "P8":  {"CoT": 1, "CL1": 0, "CL2": 1, "SR": 1},
-    "P9":  {"CoT": 0, "CL1": 1, "CL2": 0, "SR": 0},
-    "P10": {"CoT": 0, "CL1": 1, "CL2": 1, "SR": 0},
-    "P11": {"CoT": 0, "CL1": 1, "CL2": 0, "SR": 1},
-    "P12": {"CoT": 0, "CL1": 1, "CL2": 1, "SR": 1},
-    "P13": {"CoT": 1, "CL1": 1, "CL2": 0, "SR": 0},
-    "P14": {"CoT": 1, "CL1": 1, "CL2": 1, "SR": 0},
-    "P15": {"CoT": 1, "CL1": 1, "CL2": 0, "SR": 1},
-    "P16": {"CoT": 1, "CL1": 1, "CL2": 1, "SR": 1},
+    "P0":  {"CoT": 0, "CL1": 0, "CL2": 0, "SR": 0},
+    "P1":  {"CoT": 0, "CL1": 0, "CL2": 1, "SR": 0},
+    "P2":  {"CoT": 0, "CL1": 0, "CL2": 0, "SR": 1},
+    "P3":  {"CoT": 0, "CL1": 0, "CL2": 1, "SR": 1},
+    "P4":  {"CoT": 1, "CL1": 0, "CL2": 0, "SR": 0},
+    "P5":  {"CoT": 1, "CL1": 0, "CL2": 1, "SR": 0},
+    "P6":  {"CoT": 1, "CL1": 0, "CL2": 0, "SR": 1},
+    "P7":  {"CoT": 1, "CL1": 0, "CL2": 1, "SR": 1},
+    "P8":  {"CoT": 0, "CL1": 1, "CL2": 0, "SR": 0},
+    "P9":  {"CoT": 0, "CL1": 1, "CL2": 1, "SR": 0},
+    "P10": {"CoT": 0, "CL1": 1, "CL2": 0, "SR": 1},
+    "P11": {"CoT": 0, "CL1": 1, "CL2": 1, "SR": 1},
+    "P12": {"CoT": 1, "CL1": 1, "CL2": 0, "SR": 0},
+    "P13": {"CoT": 1, "CL1": 1, "CL2": 1, "SR": 0},
+    "P14": {"CoT": 1, "CL1": 1, "CL2": 0, "SR": 1},
+    "P15": {"CoT": 1, "CL1": 1, "CL2": 1, "SR": 1},
 }
 INTERACTIONS = [
     ("CoT", "CL1"),
@@ -257,7 +257,7 @@ def analyze_bootstrap_permutation(
     n_perm: int,
     alpha: float,
 ) -> pd.DataFrame:
-    baseline = "P1"
+    baseline = "P0"
     rows = []
     for metric in ("Pcollab", "Valid Argumentation", "Valid Acceptance"):
         ids0 = paired_ids(counts_map, baseline, baseline, metric)
@@ -268,8 +268,8 @@ def analyze_bootstrap_permutation(
             "prompt_id": baseline,
             "n_cases": len(ids0),
             "value": m0,
-            "value_P1": m0,
-            "delta_vs_P1": np.nan,
+            "value_P0": m0,
+            "delta_vs_P0": np.nan,
             "CI_low": np.nan,
             "CI_high": np.nan,
             "perm_p": np.nan,
@@ -286,7 +286,7 @@ def analyze_bootstrap_permutation(
             if not ids:
                 tmp.append({
                     "Model": model, "metric": metric, "prompt_id": pid, "n_cases": 0,
-                    "value": np.nan, "value_P1": np.nan, "delta_vs_P1": np.nan,
+                    "value": np.nan, "value_P0": np.nan, "delta_vs_P0": np.nan,
                     "CI_low": np.nan, "CI_high": np.nan, "perm_p": np.nan,
                 })
                 pvals.append(np.nan)
@@ -299,7 +299,7 @@ def analyze_bootstrap_permutation(
             _, p = paired_permutation_p(ids, counts_map, pid, baseline, metric, rng, n_perm)
             tmp.append({
                 "Model": model, "metric": metric, "prompt_id": pid, "n_cases": len(ids),
-                "value": val, "value_P1": base, "delta_vs_P1": delta,
+                "value": val, "value_P0": base, "delta_vs_P0": delta,
                 "CI_low": lo, "CI_high": hi, "perm_p": p,
             })
             pvals.append(p)
@@ -413,8 +413,8 @@ def analyze_correlation(boot_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=CORR_COLUMNS)
 
     for metric in ("Pcollab", "Valid Argumentation", "Valid Acceptance"):
-        sub = boot_df[(boot_df["metric"] == metric) & (boot_df["prompt_id"] != "P1")]
-        wide = sub.pivot_table(index="prompt_id", columns="Model", values="delta_vs_P1", aggfunc="first")
+        sub = boot_df[(boot_df["metric"] == metric) & (boot_df["prompt_id"] != "P0")]
+        wide = sub.pivot_table(index="prompt_id", columns="Model", values="delta_vs_P0", aggfunc="first")
         for m1, m2 in combinations(models, 2):
             if m1 not in wide.columns or m2 not in wide.columns:
                 continue

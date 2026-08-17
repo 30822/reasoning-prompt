@@ -59,7 +59,7 @@ def _get_model_short_id(model_full_name: str) -> str:
     return short
 
 def _load_experiments_for_model(model_full_name: str) -> List[dict]:
-    """Load the 16 prompt cells (P1–P16) for one target model."""
+    """Load the 16 prompt cells (P0–P15) for one target model."""
     short = _get_model_short_id(model_full_name)
 
     exps = EXPERIMENTS_YAML.get("experiments", [])

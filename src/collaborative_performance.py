@@ -1,7 +1,7 @@
 """Compute Pcollab from judged dialogues.
 
 Pcollab is the geometric mean of valid argumentation (incorrect condition) and
-valid acceptance (correct condition). Cells are labeled P1–P16.
+valid acceptance (correct condition). Cells are labeled P0–P15.
 """
 import json
 import math
@@ -28,13 +28,13 @@ _T2_ORDER = ["B", "B_CL", "B_SR", "B_CL_SR"]
 
 
 def exp_id_to_pid(experiment_id: str) -> str:
-    """Map 'o3-B_COT__B_CL_SR' to a 4x4 cell id (P1–P16)."""
+    """Map 'o3-B_COT__B_CL_SR' to a 4x4 cell id (P0–P15)."""
     try:
         rhs = experiment_id.split("-", 1)[1]
         t1, t2 = rhs.split("__", 1)
         r = _T1_ORDER.index(t1)
         c = _T2_ORDER.index(t2)
-        return f"P{r*4 + c + 1}"
+        return f"P{r*4 + c}"
     except Exception:
         return "P?"
 
